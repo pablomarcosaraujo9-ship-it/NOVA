@@ -18,7 +18,6 @@
     margin: 0 auto;
   }
 
-  /* Barra superior: busca + link discreto pro ranking */
   #topo {
     display: flex;
     align-items: center;
@@ -52,7 +51,6 @@
     cursor: pointer;
   }
 
-  /* Cartão do ativo */
   #card {
     background: #161b22;
     border: 1px solid #21262d;
@@ -87,6 +85,7 @@
     width: 100%;
     height: 280px;
     margin-top: 14px;
+    touch-action: none; /* deixa o gesto de arrastar/pinça livre pro chart */
   }
 
   #grafico-periodos {
@@ -114,10 +113,20 @@
     cursor: not-allowed;
   }
 
+  #status-live {
+    font-size: 0.75em;
+    color: #6e7681;
+    text-align: center;
+    margin-top: 10px;
+  }
+  #status-live.ativo {
+    color: #3fb950;
+  }
+
   #aviso {
     font-size: 0.78em;
     color: #6e7681;
-    margin-top: 12px;
+    margin-top: 6px;
     text-align: center;
   }
 
@@ -127,7 +136,6 @@
     padding: 40px 0;
   }
 
-  /* Painel do ranking do dia (escondido por padrão) */
   #ranking-panel {
     display: none;
     background: #161b22;
@@ -177,6 +185,7 @@
     <button disabled title="Em breve">1A</button>
   </div>
 
+  <div id="status-live">○ atualizando a cada 60s</div>
   <div id="aviso">⚠️ Movimento histórico, sem previsão de comportamento futuro.</div>
 </div>
 
@@ -188,11 +197,14 @@
 <script>
 let chart = null;
 let areaSeries = null;
+let tickerAtual = null;
+let intervaloLive = null;
 
 async function verGrafico(){
     let ticker = document.getElementById('ticker-input').value.trim();
     if (!ticker) return;
 
+    pararLive();
     fecharRanking();
     document.getElementById('mensagem').style.display = 'block';
     document.getElementById('mensagem').innerText = 'Buscando ' + ticker + '...';
@@ -204,9 +216,11 @@ async function verGrafico(){
 
         if (data.dados && data.dados.length > 1) {
             document.getElementById('mensagem').style.display = 'none';
-            preencherCard(ticker, data.dados);
+            tickerAtual = ticker.toUpperCase();
+            preencherCard(tickerAtual, data.dados[data.dados.length - 1].value, data.dados[data.dados.length - 2].value);
             renderGrafico(data.dados);
             document.getElementById('card').style.display = 'block';
+            iniciarLive();
         } else {
             document.getElementById('mensagem').innerText = data.texto || 'Erro ao gerar gráfico';
         }
@@ -215,15 +229,13 @@ async function verGrafico(){
     }
 }
 
-function preencherCard(ticker, dados) {
-    const ultimo = dados[dados.length - 1].value;
-    const anterior = dados[dados.length - 2].value;
-    const variacaoAbs = ultimo - anterior;
-    const variacaoPct = (variacaoAbs / anterior) * 100;
+function preencherCard(ticker, precoAtual, precoAnterior) {
+    const variacaoAbs = precoAtual - precoAnterior;
+    const variacaoPct = (variacaoAbs / precoAnterior) * 100;
     const subiu = variacaoAbs >= 0;
 
-    document.getElementById('card-ticker').innerText = ticker.toUpperCase();
-    document.getElementById('card-preco').innerText = 'R$ ' + ultimo.toFixed(2);
+    document.getElementById('card-ticker').innerText = ticker;
+    document.getElementById('card-preco').innerText = 'R$ ' + precoAtual.toFixed(2);
 
     const variacaoEl = document.getElementById('card-variacao');
     variacaoEl.innerText = (subiu ? '▲ +' : '▼ ') + variacaoPct.toFixed(2) + '%';
@@ -248,6 +260,19 @@ function renderGrafico(dados) {
         rightPriceScale: { borderColor: '#30363d' },
         timeScale: { borderColor: '#30363d' },
         crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        // Interação "de dedo" — arrastar e dar pinça pra zoom, explícito
+        // (são o padrão da lib, mas deixamos claro aqui de propósito)
+        handleScroll: {
+            mouseWheel: true,
+            pressedMouseMove: true,
+            horzTouchDrag: true,
+            vertTouchDrag: true,
+        },
+        handleScale: {
+            axisPressedMouseMove: true,
+            mouseWheel: true,
+            pinch: true,
+        },
     });
 
     areaSeries = chart.addAreaSeries({
@@ -268,13 +293,66 @@ window.addEventListener('resize', () => {
     }
 });
 
-// Busca automaticamente ao apertar Enter no campo
 document.getElementById('ticker-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') verGrafico();
 });
 
-// --- Ranking do dia (escondido atrás do link discreto) ---
+// --- "Ao vivo" via polling a cada 60s ---
+// Não é streaming de verdade (a Brapi/Twelve Data grátis não oferece
+// isso), mas atualiza o preço e o último ponto do gráfico sem
+// recarregar a página inteira.
+
+function iniciarLive() {
+    pararLive();
+    intervaloLive = setInterval(atualizarPrecoAoVivo, 60000);
+}
+
+function pararLive() {
+    if (intervaloLive) {
+        clearInterval(intervaloLive);
+        intervaloLive = null;
+    }
+}
+
+async function atualizarPrecoAoVivo() {
+    if (!tickerAtual || document.visibilityState !== 'visible') return;
+
+    try {
+        const r = await fetch('/api/cotacao?ticker=' + encodeURIComponent(tickerAtual));
+        const data = await r.json();
+        if (!data.sucesso || !areaSeries) return;
+
+        const hojeISO = new Date().toISOString().slice(0, 10);
+        areaSeries.update({ time: hojeISO, value: data.preco });
+
+        const precoAnteriorTexto = document.getElementById('card-preco').innerText.replace('R$', '').trim();
+        const precoAnterior = parseFloat(precoAnteriorTexto.replace(',', '.'));
+        preencherCard(tickerAtual, data.preco, isNaN(precoAnterior) ? data.preco : precoAnterior);
+
+        const status = document.getElementById('status-live');
+        status.classList.add('ativo');
+        status.innerText = '● atualizado agora';
+        setTimeout(() => {
+            status.classList.remove('ativo');
+            status.innerText = '○ atualizando a cada 60s';
+        }, 3000);
+    } catch (e) {
+        // Falha silenciosa — não interrompe a experiência por causa
+        // de uma atualização que não deu certo.
+    }
+}
+
+// Pausa o polling quando a aba fica em segundo plano, evitando
+// gastar chamadas de API à toa.
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && tickerAtual) {
+        atualizarPrecoAoVivo();
+    }
+});
+
+// --- Ranking do dia ---
 async function abrirRanking() {
+    pararLive();
     document.getElementById('card').style.display = 'none';
     document.getElementById('mensagem').style.display = 'none';
     document.getElementById('ranking-panel').style.display = 'block';
@@ -293,7 +371,6 @@ function fecharRanking() {
     document.getElementById('ranking-panel').style.display = 'none';
 }
 
-// Carrega o gráfico do ticker padrão ao abrir a página
 verGrafico();
 </script>
 
