@@ -81,11 +81,37 @@
   .up { color: #3fb950; }
   .down { color: #f85149; }
 
+  #chart-wrapper {
+    position: relative;
+    margin-top: 14px;
+  }
   #chart-container {
     width: 100%;
     height: 280px;
-    margin-top: 14px;
-    touch-action: none; /* deixa o gesto de arrastar/pinça livre pro chart */
+    touch-action: none;
+  }
+
+  /* Balão que "anda em cima" da linha, seguindo o dedo */
+  #tooltip {
+    position: absolute;
+    display: none;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 0.78em;
+    color: #eee;
+    pointer-events: none;
+    white-space: nowrap;
+    transform: translate(-50%, -110%);
+    z-index: 10;
+  }
+  #tooltip .preco {
+    font-weight: 700;
+    color: #58a6ff;
+  }
+  #tooltip .data {
+    color: #8b949e;
   }
 
   #grafico-periodos {
@@ -118,6 +144,10 @@
     color: #6e7681;
     text-align: center;
     margin-top: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
   }
   #status-live.ativo {
     color: #3fb950;
@@ -175,7 +205,13 @@
     </div>
   </div>
 
-  <div id="chart-container"></div>
+  <div id="chart-wrapper">
+    <div id="chart-container"></div>
+    <div id="tooltip">
+      <div class="preco"></div>
+      <div class="data"></div>
+    </div>
+  </div>
 
   <div id="grafico-periodos">
     <button disabled title="Em breve">1D</button>
@@ -185,7 +221,7 @@
     <button disabled title="Em breve">1A</button>
   </div>
 
-  <div id="status-live">○ atualizando a cada 60s</div>
+  <div id="status-live">🕐 <span id="contador">atualiza em 60s</span></div>
   <div id="aviso">⚠️ Movimento histórico, sem previsão de comportamento futuro.</div>
 </div>
 
@@ -198,13 +234,14 @@
 let chart = null;
 let areaSeries = null;
 let tickerAtual = null;
-let intervaloLive = null;
+let intervaloContador = null;
+let segundosRestantes = 60;
 
 async function verGrafico(){
     let ticker = document.getElementById('ticker-input').value.trim();
     if (!ticker) return;
 
-    pararLive();
+    pararContador();
     fecharRanking();
     document.getElementById('mensagem').style.display = 'block';
     document.getElementById('mensagem').innerText = 'Buscando ' + ticker + '...';
@@ -220,7 +257,7 @@ async function verGrafico(){
             preencherCard(tickerAtual, data.dados[data.dados.length - 1].value, data.dados[data.dados.length - 2].value);
             renderGrafico(data.dados);
             document.getElementById('card').style.display = 'block';
-            iniciarLive();
+            iniciarContador();
         } else {
             document.getElementById('mensagem').innerText = data.texto || 'Erro ao gerar gráfico';
         }
@@ -259,9 +296,13 @@ function renderGrafico(dados) {
         },
         rightPriceScale: { borderColor: '#30363d' },
         timeScale: { borderColor: '#30363d' },
-        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-        // Interação "de dedo" — arrastar e dar pinça pra zoom, explícito
-        // (são o padrão da lib, mas deixamos claro aqui de propósito)
+        // Magnet: o crosshair "gruda" na linha em vez de flutuar livre —
+        // é o que dá a sensação de "andar em cima do gráfico".
+        crosshair: {
+            mode: LightweightCharts.CrosshairMode.Magnet,
+            vertLine: { labelVisible: false },
+            horzLine: { labelVisible: false },
+        },
         handleScroll: {
             mouseWheel: true,
             pressedMouseMove: true,
@@ -284,6 +325,33 @@ function renderGrafico(dados) {
 
     areaSeries.setData(dados);
     chart.timeScale().fitContent();
+
+    // Balão que segue o dedo, mostrando preço e data do ponto tocado
+    chart.subscribeCrosshairMove((param) => {
+        const tooltip = document.getElementById('tooltip');
+
+        if (!param.time || !param.point || param.point.x < 0) {
+            tooltip.style.display = 'none';
+            return;
+        }
+
+        const ponto = param.seriesData.get(areaSeries);
+        if (!ponto) {
+            tooltip.style.display = 'none';
+            return;
+        }
+
+        tooltip.style.display = 'block';
+        tooltip.style.left = param.point.x + 'px';
+        tooltip.style.top = param.point.y + 'px';
+        tooltip.querySelector('.preco').innerText = 'R$ ' + ponto.value.toFixed(2);
+        tooltip.querySelector('.data').innerText = formatarDataBR(param.time);
+    });
+}
+
+function formatarDataBR(isoDate) {
+    const [ano, mes, dia] = isoDate.split('-');
+    return `${dia}/${mes}/${ano}`;
 }
 
 window.addEventListener('resize', () => {
@@ -297,25 +365,39 @@ document.getElementById('ticker-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') verGrafico();
 });
 
-// --- "Ao vivo" via polling a cada 60s ---
-// Não é streaming de verdade (a Brapi/Twelve Data grátis não oferece
-// isso), mas atualiza o preço e o último ponto do gráfico sem
-// recarregar a página inteira.
+// --- Cronômetro + atualização "ao vivo" a cada 60s ---
 
-function iniciarLive() {
-    pararLive();
-    intervaloLive = setInterval(atualizarPrecoAoVivo, 60000);
+function iniciarContador() {
+    pararContador();
+    segundosRestantes = 60;
+    atualizarTextoContador();
+    intervaloContador = setInterval(tickContador, 1000);
 }
 
-function pararLive() {
-    if (intervaloLive) {
-        clearInterval(intervaloLive);
-        intervaloLive = null;
+function pararContador() {
+    if (intervaloContador) {
+        clearInterval(intervaloContador);
+        intervaloContador = null;
     }
 }
 
+function tickContador() {
+    if (document.visibilityState !== 'visible') return;
+
+    segundosRestantes -= 1;
+    if (segundosRestantes <= 0) {
+        atualizarPrecoAoVivo();
+        segundosRestantes = 60;
+    }
+    atualizarTextoContador();
+}
+
+function atualizarTextoContador() {
+    document.getElementById('contador').innerText = `atualiza em ${segundosRestantes}s`;
+}
+
 async function atualizarPrecoAoVivo() {
-    if (!tickerAtual || document.visibilityState !== 'visible') return;
+    if (!tickerAtual) return;
 
     try {
         const r = await fetch('/api/cotacao?ticker=' + encodeURIComponent(tickerAtual));
@@ -331,28 +413,22 @@ async function atualizarPrecoAoVivo() {
 
         const status = document.getElementById('status-live');
         status.classList.add('ativo');
-        status.innerText = '● atualizado agora';
-        setTimeout(() => {
-            status.classList.remove('ativo');
-            status.innerText = '○ atualizando a cada 60s';
-        }, 3000);
+        setTimeout(() => status.classList.remove('ativo'), 1500);
     } catch (e) {
-        // Falha silenciosa — não interrompe a experiência por causa
-        // de uma atualização que não deu certo.
+        // Falha silenciosa — o cronômetro continua normal na próxima volta.
     }
 }
 
-// Pausa o polling quando a aba fica em segundo plano, evitando
-// gastar chamadas de API à toa.
 document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && tickerAtual) {
-        atualizarPrecoAoVivo();
+        segundosRestantes = 60;
+        atualizarTextoContador();
     }
 });
 
 // --- Ranking do dia ---
 async function abrirRanking() {
-    pararLive();
+    pararContador();
     document.getElementById('card').style.display = 'none';
     document.getElementById('mensagem').style.display = 'none';
     document.getElementById('ranking-panel').style.display = 'block';
