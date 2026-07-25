@@ -5,12 +5,37 @@
 // string (?ticker=PETR4.SA).
 //
 // Devolve DOIS formatos, para não quebrar nada que já funciona:
-// - "url": imagem pronta do QuickChart (formato antigo, ainda
-//   funciona se algo ainda usar <img>)
-// - "dados": array [{ time, value }] cru, para o gráfico
-//   interativo (lightweight-charts) no novo componente do site
+// - "url": imagem pronta do QuickChart (formato antigo)
+// - "dados": array [{ time, value }] cru, no formato aaaa-mm-dd
+//   que o lightweight-charts exige, para o gráfico interativo
 
 const grafico = require('../grafico');
+
+/**
+ * Converte uma data no formato "dd/mm" (como o grafico.js do bot
+ * devolve) para "aaaa-mm-dd" (formato exigido pelo lightweight-charts).
+ *
+ * Como "dd/mm" não tem ano, assume o ano atual — e se a data
+ * resultante cair no futuro (ex: hoje é janeiro e a data é
+ * dezembro), assume que é do ano anterior. Isso cobre o caso de
+ * uma janela de 30 dias que atravessa a virada do ano.
+ */
+function paraDataISO(dataBR, referencia = new Date()) {
+    const [diaStr, mesStr] = dataBR.split('/');
+    const dia = parseInt(diaStr, 10);
+    const mes = parseInt(mesStr, 10);
+
+    let ano = referencia.getFullYear();
+    let data = new Date(ano, mes - 1, dia);
+
+    if (data > referencia) {
+        ano -= 1;
+    }
+
+    const mm = String(mes).padStart(2, '0');
+    const dd = String(dia).padStart(2, '0');
+    return `${ano}-${mm}-${dd}`;
+}
 
 module.exports = async (req, res) => {
     try {
@@ -26,11 +51,8 @@ module.exports = async (req, res) => {
 
         const urlGrafico = grafico.gerarUrlGrafico(ticker, historico.datas, historico.precos);
 
-        // Monta o array no formato que o lightweight-charts espera.
-        // historico.datas e historico.precos vêm alinhados (mesmo índice
-        // = mesmo dia), então dá pra combinar os dois em pares.
         const dados = historico.datas.map((data, i) => ({
-            time: data,
+            time: paraDataISO(data),
             value: historico.precos[i],
         }));
 
