@@ -2,8 +2,13 @@
 //
 // Reaproveita o MESMO grafico.js que o bot de Telegram usa
 // (por isso o require com "../"). Recebe o ticker via query
-// string (?ticker=PETR4.SA) e devolve a URL do gráfico já
-// pronta, igual ao /grafico do bot.
+// string (?ticker=PETR4.SA).
+//
+// Devolve DOIS formatos, para não quebrar nada que já funciona:
+// - "url": imagem pronta do QuickChart (formato antigo, ainda
+//   funciona se algo ainda usar <img>)
+// - "dados": array [{ time, value }] cru, para o gráfico
+//   interativo (lightweight-charts) no novo componente do site
 
 const grafico = require('../grafico');
 
@@ -21,8 +26,17 @@ module.exports = async (req, res) => {
 
         const urlGrafico = grafico.gerarUrlGrafico(ticker, historico.datas, historico.precos);
 
+        // Monta o array no formato que o lightweight-charts espera.
+        // historico.datas e historico.precos vêm alinhados (mesmo índice
+        // = mesmo dia), então dá pra combinar os dois em pares.
+        const dados = historico.datas.map((data, i) => ({
+            time: data,
+            value: historico.precos[i],
+        }));
+
         res.status(200).json({
             url: urlGrafico,
+            dados,
             texto: `📈 ${ticker} — Últimos 30 dias\n\n⚠️ Movimento histórico, sem previsão de comportamento futuro.`,
         });
     } catch (error) {
