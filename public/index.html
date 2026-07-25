@@ -515,6 +515,13 @@ function fecharRanking() {
     document.getElementById('ranking-panel').style.display = 'none';
 }
 
+// Se o bot mandou um link tipo ?ticker=PETR4.SA, já abre com esse ticker
+const params = new URLSearchParams(window.location.search);
+const tickerDaURL = params.get('ticker');
+if (tickerDaURL) {
+    document.getElementById('ticker-input').value = tickerDaURL.toUpperCase();
+}
+
 verGrafico();
 </script>
 
