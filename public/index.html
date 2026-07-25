@@ -243,9 +243,22 @@ async function verGrafico(){
 
     pararContador();
     fecharRanking();
-    document.getElementById('mensagem').style.display = 'block';
-    document.getElementById('mensagem').innerText = 'Buscando ' + ticker + '...';
-    document.getElementById('card').style.display = 'none';
+
+    // Mostra o que já tem salvo localmente PRIMEIRO (instantâneo),
+    // enquanto busca a versão atualizada por trás, em silêncio.
+    const doCache = lerDoCache(ticker.toUpperCase());
+    if (doCache) {
+        document.getElementById('mensagem').style.display = 'none';
+        tickerAtual = ticker.toUpperCase();
+        preencherCard(tickerAtual, doCache[doCache.length - 1].value, doCache[doCache.length - 2].value);
+        document.getElementById('card').style.display = 'block';
+        requestAnimationFrame(() => renderGrafico(doCache));
+        iniciarContador();
+    } else {
+        document.getElementById('mensagem').style.display = 'block';
+        document.getElementById('mensagem').innerText = 'Buscando ' + ticker + '...';
+        document.getElementById('card').style.display = 'none';
+    }
 
     try {
         let r = await fetch('/api/grafico?ticker=' + encodeURIComponent(ticker));
@@ -255,14 +268,43 @@ async function verGrafico(){
             document.getElementById('mensagem').style.display = 'none';
             tickerAtual = ticker.toUpperCase();
             preencherCard(tickerAtual, data.dados[data.dados.length - 1].value, data.dados[data.dados.length - 2].value);
-            renderGrafico(data.dados);
             document.getElementById('card').style.display = 'block';
+            requestAnimationFrame(() => {
+                renderGrafico(data.dados);
+            });
+            salvarNoCache(tickerAtual, data.dados);
             iniciarContador();
-        } else {
+        } else if (!doCache) {
             document.getElementById('mensagem').innerText = data.texto || 'Erro ao gerar gráfico';
         }
     } catch (e) {
-        document.getElementById('mensagem').innerText = 'Erro ao buscar gráfico: ' + e.message;
+        if (!doCache) {
+            document.getElementById('mensagem').innerText = 'Erro ao buscar gráfico: ' + e.message;
+        }
+    }
+}
+
+// --- Cache local (localStorage) — carregamento instantâneo ao reabrir ---
+
+function chaveCache(ticker) {
+    return 'nova_grafico_' + ticker;
+}
+
+function salvarNoCache(ticker, dados) {
+    try {
+        localStorage.setItem(chaveCache(ticker), JSON.stringify(dados));
+    } catch (e) {
+        // Se o localStorage estiver cheio/bloqueado, ignora silenciosamente —
+        // a página continua funcionando normal, só sem cache.
+    }
+}
+
+function lerDoCache(ticker) {
+    try {
+        const bruto = localStorage.getItem(chaveCache(ticker));
+        return bruto ? JSON.parse(bruto) : null;
+    } catch (e) {
+        return null;
     }
 }
 
