@@ -1,40 +1,27 @@
 // Arquivo: api/grafico.js — endpoint do site NOVA Web (Vercel)
 //
 // Reaproveita o MESMO grafico.js que o bot de Telegram usa
-// (por isso o require com "../"). Recebe o ticker via query
-// string (?ticker=PETR4.SA).
+// (por isso o require com "../"). Recebe o ticker e o período
+// via query string: ?ticker=PETR4.SA&periodo=5a
 //
-// Devolve DOIS formatos:
+// periodo aceito: 5d | 1mo (padrão) | 6mo | 1a | 5a
+//
+// Devolve:
 // - "url": imagem pronta do QuickChart (formato antigo)
-// - "dados": array [{ time, value }] no formato aaaa-mm-dd,
-//   SEMPRE ordenado cronologicamente e sem datas duplicadas —
-//   o lightweight-charts exige ordem crescente estrita, senão
-//   desenha picos/zigues errados.
+// - "dados": array [{ time, value }] em aaaa-mm-dd — vem direto
+//   de historico.datasISO (data completa, sem ambiguidade de ano),
+//   ainda ordenado/deduplicado por segurança extra.
 
 const grafico = require('../grafico');
 
-function paraDataISO(dataBR, referencia = new Date()) {
-    const [diaStr, mesStr] = dataBR.split('/');
-    const dia = parseInt(diaStr, 10);
-    const mes = parseInt(mesStr, 10);
+const LABELS_PERIODO = {
+    '5d': 'Últimos 5 dias',
+    '1mo': 'Últimos 30 dias',
+    '6mo': 'Últimos 6 meses',
+    '1a': 'Último 1 ano',
+    '5a': 'Últimos 5 anos',
+};
 
-    let ano = referencia.getFullYear();
-    let data = new Date(ano, mes - 1, dia);
-
-    if (data > referencia) {
-        ano -= 1;
-    }
-
-    const mm = String(mes).padStart(2, '0');
-    const dd = String(dia).padStart(2, '0');
-    return `${ano}-${mm}-${dd}`;
-}
-
-/**
- * Garante que o array de pontos está em ordem cronológica
- * crescente e sem datas repetidas (se houver duplicata, mantém
- * a última ocorrência — a mais "atual" na lista original).
- */
 function ordenarERemoverDuplicatas(pontos) {
     const ordenados = [...pontos].sort((a, b) => a.time.localeCompare(b.time));
 
@@ -42,7 +29,7 @@ function ordenarERemoverDuplicatas(pontos) {
     for (const ponto of ordenados) {
         const ultimo = limpos[limpos.length - 1];
         if (ultimo && ultimo.time === ponto.time) {
-            limpos[limpos.length - 1] = ponto; // substitui pela versão mais recente
+            limpos[limpos.length - 1] = ponto;
         } else {
             limpos.push(ponto);
         }
@@ -53,8 +40,10 @@ function ordenarERemoverDuplicatas(pontos) {
 module.exports = async (req, res) => {
     try {
         const ticker = (req.query.ticker || 'PETR4.SA').toUpperCase();
+        const periodo = LABELS_PERIODO[req.query.periodo] ? req.query.periodo : '1mo';
+        const periodoLabel = LABELS_PERIODO[periodo];
 
-        const historico = await grafico.buscarHistorico(ticker);
+        const historico = await grafico.buscarHistorico(ticker, periodo);
 
         if (!historico.sucesso) {
             return res.status(200).json({
@@ -62,10 +51,16 @@ module.exports = async (req, res) => {
             });
         }
 
-        const urlGrafico = grafico.gerarUrlGrafico(ticker, historico.datas, historico.precos);
+        const urlGrafico = grafico.gerarUrlGrafico(ticker, historico.datas, historico.precos, periodoLabel);
 
-        const pontosBrutos = historico.datas.map((data, i) => ({
-            time: paraDataISO(data),
+        // Usa datasISO (data completa, sem adivinhação de ano) —
+        // se por algum motivo não existir (ex: cache antigo), cai
+        // para um fallback simples usando "datas" cru, sem tentar
+        // converter (evita reintroduzir o bug de ano ambíguo).
+        const fonteDatas = historico.datasISO || historico.datas;
+
+        const pontosBrutos = fonteDatas.map((data, i) => ({
+            time: data,
             value: historico.precos[i],
         }));
 
@@ -74,7 +69,8 @@ module.exports = async (req, res) => {
         res.status(200).json({
             url: urlGrafico,
             dados,
-            texto: `📈 ${ticker} — Últimos 30 dias\n\n⚠️ Movimento histórico, sem previsão de comportamento futuro.`,
+            periodo,
+            texto: `📈 ${ticker} — ${periodoLabel}\n\n⚠️ Movimento histórico, sem previsão de comportamento futuro.`,
         });
     } catch (error) {
         console.error('Erro no endpoint /api/grafico:', error);
