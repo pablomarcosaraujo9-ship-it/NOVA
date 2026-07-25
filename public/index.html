@@ -3,76 +3,106 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NOVA Web</title>
+<title>NOVA</title>
 
-<!-- lightweight-charts via CDN — sem build, sem npm install.
-     Projeto é HTML/JS puro, então a biblioteca entra assim. -->
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 
 <style>
+  * { box-sizing: border-box; }
   body {
     background: #0d1117;
     color: #eee;
-    font-family: sans-serif;
-    padding: 20px;
-    max-width: 700px;
+    font-family: -apple-system, sans-serif;
+    padding: 16px;
+    max-width: 480px;
     margin: 0 auto;
   }
-  h1 {
-    font-size: 1.8em;
+
+  /* Barra superior: busca + link discreto pro ranking */
+  #topo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
   }
-  button {
-    background: #1e88e5;
-    color: white;
-    border: none;
-    padding: 14px;
-    width: 100%;
+  #ticker-input {
+    flex: 1;
+    padding: 12px 14px;
+    font-size: 1em;
+    border-radius: 10px;
+    border: 1px solid #30363d;
+    background: #161b22;
+    color: #eee;
+  }
+  #btn-buscar {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    border: 1px solid #30363d;
+    background: #161b22;
+    color: #8b949e;
     font-size: 1.1em;
-    border-radius: 8px;
-    margin: 10px 0;
     cursor: pointer;
   }
-  input {
-    width: 100%;
-    padding: 12px;
-    font-size: 1.1em;
-    border-radius: 8px;
-    border: 1px solid #444;
-    background: #222;
-    color: #eee;
-    box-sizing: border-box;
-  }
-  #saida {
-    background: #1a1a1a;
-    border-radius: 8px;
-    padding: 14px;
-    margin-top: 10px;
-    white-space: pre-wrap;
-    font-family: monospace;
+  #link-ranking {
+    text-align: right;
+    font-size: 0.85em;
+    color: #58a6ff;
+    margin-bottom: 12px;
+    cursor: pointer;
   }
 
-  /* --- Componente de gráfico (dark/slate) --- */
-  #grafico-card {
+  /* Cartão do ativo */
+  #card {
     background: #161b22;
-    border: 1px solid #2a2f38;
-    border-radius: 12px;
-    padding: 16px;
-    margin-top: 12px;
-    display: none; /* aparece só depois de carregar dados */
+    border: 1px solid #21262d;
+    border-radius: 14px;
+    padding: 18px;
+    display: none;
   }
+  #card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 4px;
+  }
+  #card-ticker {
+    font-size: 1.3em;
+    font-weight: 700;
+  }
+  #card-preco {
+    font-size: 1.5em;
+    font-weight: 700;
+    text-align: right;
+  }
+  #card-variacao {
+    text-align: right;
+    font-size: 0.95em;
+    margin-top: 2px;
+  }
+  .up { color: #3fb950; }
+  .down { color: #f85149; }
+
+  #chart-container {
+    width: 100%;
+    height: 280px;
+    margin-top: 14px;
+  }
+
   #grafico-periodos {
     display: flex;
-    gap: 8px;
-    margin-top: 10px;
+    gap: 6px;
+    margin-top: 12px;
   }
   #grafico-periodos button {
     flex: 1;
-    padding: 8px;
-    font-size: 0.9em;
-    margin: 0;
-    background: #21262d;
+    padding: 8px 0;
+    font-size: 0.85em;
+    border-radius: 8px;
     border: 1px solid #30363d;
+    background: #21262d;
     color: #8b949e;
+    cursor: pointer;
   }
   #grafico-periodos button.ativo {
     background: #1e88e5;
@@ -80,93 +110,133 @@
     border-color: #1e88e5;
   }
   #grafico-periodos button:disabled {
-    opacity: 0.4;
+    opacity: 0.35;
     cursor: not-allowed;
   }
-  #chart-container {
-    width: 100%;
-    height: 320px;
+
+  #aviso {
+    font-size: 0.78em;
+    color: #6e7681;
     margin-top: 12px;
-  }
-  #grafico-aviso {
-    font-size: 0.85em;
-    color: #8b949e;
-    margin-top: 10px;
     text-align: center;
+  }
+
+  #mensagem {
+    text-align: center;
+    color: #6e7681;
+    padding: 40px 0;
+  }
+
+  /* Painel do ranking do dia (escondido por padrão) */
+  #ranking-panel {
+    display: none;
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 14px;
+    padding: 18px;
+    white-space: pre-wrap;
+    font-family: monospace;
+    font-size: 0.9em;
+  }
+  #voltar-grafico {
+    color: #58a6ff;
+    cursor: pointer;
+    font-size: 0.85em;
+    margin-bottom: 10px;
+    display: inline-block;
   }
 </style>
 </head>
 <body>
 
-<h1>NOVA._.📈 Web</h1>
+<div id="topo">
+  <input id="ticker-input" type="text" placeholder="Digite um ticker (ex: PETR4.SA)" value="PETR4.SA">
+  <button id="btn-buscar" onclick="verGrafico()">🔍</button>
+</div>
 
-<button onclick="rodarInvestir()">Rodar /investir</button>
+<div id="link-ranking" onclick="abrirRanking()">📊 Ranking do dia</div>
 
-<input id="ticker" type="text" placeholder="PETR4.SA" value="PETR4.SA">
-<button onclick="verGrafico()">Ver Gráfico</button>
+<div id="mensagem">Digite um ticker e busque para ver o gráfico.</div>
 
-<div id="saida">Clique em um botão...</div>
+<div id="card">
+  <div id="card-header">
+    <div id="card-ticker"></div>
+    <div>
+      <div id="card-preco"></div>
+      <div id="card-variacao"></div>
+    </div>
+  </div>
 
-<!-- Componente de gráfico interativo -->
-<div id="grafico-card">
+  <div id="chart-container"></div>
+
   <div id="grafico-periodos">
     <button disabled title="Em breve">1D</button>
-    <button class="ativo" id="btn-1m">1M</button>
+    <button disabled title="Em breve">5D</button>
+    <button class="ativo">1M</button>
+    <button disabled title="Em breve">6M</button>
     <button disabled title="Em breve">1A</button>
   </div>
-  <div id="chart-container"></div>
-  <div id="grafico-aviso">⚠️ Movimento histórico, sem previsão de comportamento futuro.</div>
+
+  <div id="aviso">⚠️ Movimento histórico, sem previsão de comportamento futuro.</div>
+</div>
+
+<div id="ranking-panel">
+  <span id="voltar-grafico" onclick="fecharRanking()">← Voltar ao gráfico</span>
+  <div id="ranking-texto">Carregando...</div>
 </div>
 
 <script>
 let chart = null;
 let areaSeries = null;
 
-async function rodarInvestir(){
-    document.getElementById('saida').innerText = 'Buscando dados de mercado...';
-    document.getElementById('grafico-card').style.display = 'none';
-    try {
-        let r = await fetch('/api/investir');
-        let data = await r.json();
-        document.getElementById('saida').innerText = data.texto || 'Sem resposta.';
-    } catch (e) {
-        document.getElementById('saida').innerText = 'Erro ao buscar dados: ' + e.message;
-    }
-}
-
 async function verGrafico(){
-    let ticker = document.getElementById('ticker').value;
-    document.getElementById('saida').innerText = 'Buscando ' + ticker + '...';
-    document.getElementById('grafico-card').style.display = 'none';
+    let ticker = document.getElementById('ticker-input').value.trim();
+    if (!ticker) return;
+
+    fecharRanking();
+    document.getElementById('mensagem').style.display = 'block';
+    document.getElementById('mensagem').innerText = 'Buscando ' + ticker + '...';
+    document.getElementById('card').style.display = 'none';
 
     try {
-        let r = await fetch('/api/grafico?ticker=' + ticker);
+        let r = await fetch('/api/grafico?ticker=' + encodeURIComponent(ticker));
         let data = await r.json();
 
-        if (data.dados && data.dados.length > 0) {
-            document.getElementById('saida').innerText = data.texto;
+        if (data.dados && data.dados.length > 1) {
+            document.getElementById('mensagem').style.display = 'none';
+            preencherCard(ticker, data.dados);
             renderGrafico(data.dados);
-            document.getElementById('grafico-card').style.display = 'block';
+            document.getElementById('card').style.display = 'block';
         } else {
-            document.getElementById('saida').innerText = data.texto || 'Erro ao gerar gráfico';
+            document.getElementById('mensagem').innerText = data.texto || 'Erro ao gerar gráfico';
         }
     } catch (e) {
-        document.getElementById('saida').innerText = 'Erro ao buscar gráfico: ' + e.message;
+        document.getElementById('mensagem').innerText = 'Erro ao buscar gráfico: ' + e.message;
     }
 }
 
-/**
- * Desenha (ou redesenha) o gráfico de área usando lightweight-charts,
- * com estilo dark/slate e sombra azul.
- * @param {Array<{time: string, value: number}>} dados
- */
+function preencherCard(ticker, dados) {
+    const ultimo = dados[dados.length - 1].value;
+    const anterior = dados[dados.length - 2].value;
+    const variacaoAbs = ultimo - anterior;
+    const variacaoPct = (variacaoAbs / anterior) * 100;
+    const subiu = variacaoAbs >= 0;
+
+    document.getElementById('card-ticker').innerText = ticker.toUpperCase();
+    document.getElementById('card-preco').innerText = 'R$ ' + ultimo.toFixed(2);
+
+    const variacaoEl = document.getElementById('card-variacao');
+    variacaoEl.innerText = (subiu ? '▲ +' : '▼ ') + variacaoPct.toFixed(2) + '%';
+    variacaoEl.className = subiu ? 'up' : 'down';
+}
+
 function renderGrafico(dados) {
     const container = document.getElementById('chart-container');
-    container.innerHTML = ''; // limpa gráfico anterior, se houver
+    container.innerHTML = '';
 
     chart = LightweightCharts.createChart(container, {
         width: container.clientWidth,
-        height: 320,
+        height: 280,
         layout: {
             background: { color: '#161b22' },
             textColor: '#8b949e',
@@ -175,15 +245,9 @@ function renderGrafico(dados) {
             vertLines: { color: '#21262d' },
             horzLines: { color: '#21262d' },
         },
-        rightPriceScale: {
-            borderColor: '#30363d',
-        },
-        timeScale: {
-            borderColor: '#30363d',
-        },
-        crosshair: {
-            mode: LightweightCharts.CrosshairMode.Normal,
-        },
+        rightPriceScale: { borderColor: '#30363d' },
+        timeScale: { borderColor: '#30363d' },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     });
 
     areaSeries = chart.addAreaSeries({
@@ -197,13 +261,40 @@ function renderGrafico(dados) {
     chart.timeScale().fitContent();
 }
 
-// Redimensiona o gráfico se a tela mudar de tamanho (responsivo)
 window.addEventListener('resize', () => {
     if (chart) {
         const container = document.getElementById('chart-container');
         chart.applyOptions({ width: container.clientWidth });
     }
 });
+
+// Busca automaticamente ao apertar Enter no campo
+document.getElementById('ticker-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') verGrafico();
+});
+
+// --- Ranking do dia (escondido atrás do link discreto) ---
+async function abrirRanking() {
+    document.getElementById('card').style.display = 'none';
+    document.getElementById('mensagem').style.display = 'none';
+    document.getElementById('ranking-panel').style.display = 'block';
+    document.getElementById('ranking-texto').innerText = 'Buscando dados de mercado...';
+
+    try {
+        let r = await fetch('/api/investir');
+        let data = await r.json();
+        document.getElementById('ranking-texto').innerText = data.texto || 'Sem resposta.';
+    } catch (e) {
+        document.getElementById('ranking-texto').innerText = 'Erro ao buscar dados: ' + e.message;
+    }
+}
+
+function fecharRanking() {
+    document.getElementById('ranking-panel').style.display = 'none';
+}
+
+// Carrega o gráfico do ticker padrão ao abrir a página
+verGrafico();
 </script>
 
 </body>
