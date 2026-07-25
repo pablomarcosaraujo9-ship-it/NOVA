@@ -214,11 +214,12 @@
   </div>
 
   <div id="grafico-periodos">
-    <button disabled title="Em breve">1D</button>
-    <button disabled title="Em breve">5D</button>
-    <button class="ativo">1M</button>
-    <button disabled title="Em breve">6M</button>
-    <button disabled title="Em breve">1A</button>
+    <button disabled title="Em breve (precisa de dado intraday)">1D</button>
+    <button onclick="trocarPeriodo('5d')" id="btn-5d">5D</button>
+    <button class="ativo" onclick="trocarPeriodo('1mo')" id="btn-1mo">1M</button>
+    <button onclick="trocarPeriodo('6mo')" id="btn-6mo">6M</button>
+    <button onclick="trocarPeriodo('1a')" id="btn-1a">1A</button>
+    <button onclick="trocarPeriodo('5a')" id="btn-5a">5A</button>
   </div>
 
   <div id="status-live">🕐 <span id="contador">atualiza em 60s</span></div>
@@ -234,22 +235,45 @@
 let chart = null;
 let areaSeries = null;
 let tickerAtual = null;
+let periodoAtual = '1mo';
 let intervaloContador = null;
 let segundosRestantes = 60;
 
 async function verGrafico(){
     let ticker = document.getElementById('ticker-input').value.trim();
     if (!ticker) return;
+    periodoAtual = '1mo';
+    marcarBotaoAtivo('1mo');
+    await carregarGrafico(ticker, periodoAtual);
+}
 
+function trocarPeriodo(periodo) {
+    if (!tickerAtual) return;
+    periodoAtual = periodo;
+    marcarBotaoAtivo(periodo);
+    carregarGrafico(tickerAtual, periodo);
+}
+
+function marcarBotaoAtivo(periodo) {
+    document.querySelectorAll('#grafico-periodos button').forEach((b) => b.classList.remove('ativo'));
+    const mapa = { '5d': 'btn-5d', '1mo': 'btn-1mo', '6mo': 'btn-6mo', '1a': 'btn-1a', '5a': 'btn-5a' };
+    const btn = document.getElementById(mapa[periodo]);
+    if (btn) btn.classList.add('ativo');
+}
+
+async function carregarGrafico(ticker, periodo){
     pararContador();
     fecharRanking();
 
+    const tickerUpper = ticker.toUpperCase();
+
     // Mostra o que já tem salvo localmente PRIMEIRO (instantâneo),
     // enquanto busca a versão atualizada por trás, em silêncio.
-    const doCache = lerDoCache(ticker.toUpperCase());
+    const doCache = lerDoCache(tickerUpper, periodo);
     if (doCache) {
         document.getElementById('mensagem').style.display = 'none';
-        tickerAtual = ticker.toUpperCase();
+        tickerAtual = tickerUpper;
+        periodoAtual = periodo;
         preencherCard(tickerAtual, doCache[doCache.length - 1].value, doCache[doCache.length - 2].value);
         document.getElementById('card').style.display = 'block';
         requestAnimationFrame(() => renderGrafico(doCache));
@@ -261,18 +285,19 @@ async function verGrafico(){
     }
 
     try {
-        let r = await fetch('/api/grafico?ticker=' + encodeURIComponent(ticker));
+        let r = await fetch('/api/grafico?ticker=' + encodeURIComponent(ticker) + '&periodo=' + encodeURIComponent(periodo));
         let data = await r.json();
 
         if (data.dados && data.dados.length > 1) {
             document.getElementById('mensagem').style.display = 'none';
-            tickerAtual = ticker.toUpperCase();
+            tickerAtual = tickerUpper;
+            periodoAtual = periodo;
             preencherCard(tickerAtual, data.dados[data.dados.length - 1].value, data.dados[data.dados.length - 2].value);
             document.getElementById('card').style.display = 'block';
             requestAnimationFrame(() => {
                 renderGrafico(data.dados);
             });
-            salvarNoCache(tickerAtual, data.dados);
+            salvarNoCache(tickerAtual, periodo, data.dados);
             iniciarContador();
         } else if (!doCache) {
             document.getElementById('mensagem').innerText = data.texto || 'Erro ao gerar gráfico';
@@ -285,23 +310,24 @@ async function verGrafico(){
 }
 
 // --- Cache local (localStorage) — carregamento instantâneo ao reabrir ---
+// Uma chave por ticker + período, para não misturar dados de janelas diferentes.
 
-function chaveCache(ticker) {
-    return 'nova_grafico_' + ticker;
+function chaveCache(ticker, periodo) {
+    return 'nova_grafico_' + ticker + '_' + periodo;
 }
 
-function salvarNoCache(ticker, dados) {
+function salvarNoCache(ticker, periodo, dados) {
     try {
-        localStorage.setItem(chaveCache(ticker), JSON.stringify(dados));
+        localStorage.setItem(chaveCache(ticker, periodo), JSON.stringify(dados));
     } catch (e) {
         // Se o localStorage estiver cheio/bloqueado, ignora silenciosamente —
         // a página continua funcionando normal, só sem cache.
     }
 }
 
-function lerDoCache(ticker) {
+function lerDoCache(ticker, periodo) {
     try {
-        const bruto = localStorage.getItem(chaveCache(ticker));
+        const bruto = localStorage.getItem(chaveCache(ticker, periodo));
         return bruto ? JSON.parse(bruto) : null;
     } catch (e) {
         return null;
