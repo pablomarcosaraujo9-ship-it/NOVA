@@ -174,24 +174,21 @@ bot.on('text', async (ctx) => {
         const ticker = texto.toUpperCase();
         estadoConversa.delete(chatId);
 
-        await ctx.reply(`🔍 Buscando histórico de \`${ticker}\`...`, { parse_mode: 'Markdown' });
-
         try {
-            const historico = await grafico.buscarHistorico(ticker);
-
-            if (!historico.sucesso) {
-                await ctx.reply(`⚠️ Não foi possível obter o histórico de ${ticker}: ${historico.erro}`);
-                return;
-            }
-
-            const urlGrafico = grafico.gerarUrlGrafico(ticker, historico.datas, historico.precos);
-            const urlYahoo = grafico.gerarUrlYahooFinance(ticker);
-            await ctx.replyWithPhoto(urlGrafico, {
-                caption: `📈 \`${ticker}\` — Últimos 30 dias\n\n` +
-                    `🔗 [Ver gráfico interativo no Yahoo Finance](${urlYahoo})\n\n` +
-                    `⚠️ Movimento histórico, sem previsão de comportamento futuro.`,
-                parse_mode: 'Markdown',
-            });
+            await ctx.reply(
+                `📈 Gráfico interativo de \`${ticker}\``,
+                {
+                    parse_mode: 'Markdown',
+                    reply_markup: {
+                        inline_keyboard: [[
+                            {
+                                text: '📊 Abrir Gráfico',
+                                web_app: { url: `https://nova-mu-rose.vercel.app/?ticker=${encodeURIComponent(ticker)}` }
+                            }
+                        ]]
+                    }
+                }
+            );
         } catch (e) {
             console.error("Erro no gráfico:", e.message);
             await ctx.reply("⚠️ Ocorreu um erro ao gerar o gráfico. Tente novamente com /grafico.");
