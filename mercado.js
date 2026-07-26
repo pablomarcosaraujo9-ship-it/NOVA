@@ -219,9 +219,79 @@ async function buscarMultiplasCotacoesParalelo(tickers, tamanhoLote = 5, interva
     return resultados;
 }
 
+/**
+ * NOVO — Fase 4 do roadmap: versão híbrida usada pelo BOT (Telegram).
+ *
+ * Ativos brasileiros (Brapi) são buscados em PARALELO, em lotes
+ * pequenos — a Brapi tolera isso melhor.
+ * Ativos globais (Twelve Data) continuam SEQUENCIAIS, com 8s entre
+ * cada um — não dá pra acelerar essa parte sem violar o limite real
+ * do plano grátis da Twelve Data (8 requisições por minuto). Tentar
+ * paralelizar aqui não deixaria mais rápido, só quebraria com erro
+ * de limite excedido.
+ *
+ * As duas partes rodam ao mesmo tempo (Promise.all), então o tempo
+ * total passa a ser aproximadamente o tempo da parte mais lenta
+ * (os globais), não a soma das duas — corta o tempo total quase
+ * pela metade em relação à versão 100% sequencial.
+ */
+async function buscarMultiplasCotacoesOtimizado(tickers) {
+    const chave = gerarChaveCacheCotacoes(tickers);
+    const cacheado = cacheCotacoes.get(chave);
+
+    if (cacheado && cacheEstaValido(cacheado.timestamp)) {
+        console.log(`📦 Usando cache da varredura - otimizado (idade: ${Math.round((Date.now() - cacheado.timestamp) / 1000)}s)`);
+        return cacheado.dados;
+    }
+
+    const brasil = tickers.filter((t) => t.toUpperCase().endsWith('.SA'));
+    const globais = tickers.filter((t) => !t.toUpperCase().endsWith('.SA'));
+
+    async function buscarBrasilEmParalelo() {
+        const resultados = [];
+        const TAMANHO_LOTE = 5;
+        const INTERVALO_LOTE_MS = 500;
+
+        for (let i = 0; i < brasil.length; i += TAMANHO_LOTE) {
+            const lote = brasil.slice(i, i + TAMANHO_LOTE);
+            const dadosLote = await Promise.all(lote.map((ticker) => buscarCotacao(ticker)));
+            resultados.push(...dadosLote);
+
+            if (i + TAMANHO_LOTE < brasil.length) {
+                await new Promise((resolve) => setTimeout(resolve, INTERVALO_LOTE_MS));
+            }
+        }
+        return resultados;
+    }
+
+    async function buscarGlobaisSequencial() {
+        const resultados = [];
+        const INTERVALO_MS = 8000; // respeita o limite de 8 req/min da Twelve Data
+
+        for (let i = 0; i < globais.length; i++) {
+            resultados.push(await buscarCotacao(globais[i]));
+            if (i < globais.length - 1) {
+                await new Promise((resolve) => setTimeout(resolve, INTERVALO_MS));
+            }
+        }
+        return resultados;
+    }
+
+    const [resultadosBrasil, resultadosGlobais] = await Promise.all([
+        buscarBrasilEmParalelo(),
+        buscarGlobaisSequencial(),
+    ]);
+
+    const resultados = [...resultadosBrasil, ...resultadosGlobais];
+
+    cacheCotacoes.set(chave, { dados: resultados, timestamp: Date.now() });
+    return resultados;
+}
+
 module.exports = {
     buscarCotacao,
     buscarMultiplasCotacoes,
     buscarMultiplasCotacoesParalelo,
+    buscarMultiplasCotacoesOtimizado,
     buscarCotacaoUSDBRL,
 };
