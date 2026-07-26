@@ -226,7 +226,26 @@ bot.on('text', async (ctx) => {
             await ctx.reply("⚠️ Quantidade inválida. Digite um número, ex: 2 ou 2.5");
             return;
         }
-        estadoConversa.set(chatId, { ...estado, etapa: 'aguardando_meta_carteira_add', quantidade });
+        estadoConversa.set(chatId, { ...estado, etapa: 'aguardando_preco_medio_carteira_add', quantidade });
+        await ctx.reply(
+            "💵 Qual foi o preço médio de compra?\n\n(Ex: 42.50. Ou digite *pular* se não quiser acompanhar ganho/perda deste ativo.)",
+            { parse_mode: 'Markdown' }
+        );
+        return;
+    }
+
+    if (estado.etapa === 'aguardando_preco_medio_carteira_add') {
+        let precoMedio = null;
+
+        if (texto.toLowerCase() !== 'pular') {
+            precoMedio = parseFloat(texto.replace(',', '.'));
+            if (isNaN(precoMedio) || precoMedio <= 0) {
+                await ctx.reply("⚠️ Preço inválido. Digite um número, ex: 42.50, ou *pular*.", { parse_mode: 'Markdown' });
+                return;
+            }
+        }
+
+        estadoConversa.set(chatId, { ...estado, etapa: 'aguardando_meta_carteira_add', precoMedio });
         await ctx.reply("🎯 Qual a meta de alocação (%) desse ativo na sua carteira?\n\n(Ex: 25)");
         return;
     }
@@ -240,10 +259,11 @@ bot.on('text', async (ctx) => {
         estadoConversa.delete(chatId);
 
         try {
-            const resultado = await carteira.adicionarAtivo(estado.ticker, estado.quantidade, metaPercentual);
+            const resultado = await carteira.adicionarAtivo(estado.ticker, estado.quantidade, metaPercentual, estado.precoMedio);
             if (resultado.sucesso) {
+                const linhaPreco = estado.precoMedio ? `\nPreço médio: ${estado.precoMedio}` : '';
                 await ctx.reply(
-                    `✅ \`${estado.ticker}\` adicionado à carteira!\nQuantidade: ${estado.quantidade}\nMeta: ${metaPercentual}%\n\nUse /carteira para ver a alocação completa.`,
+                    `✅ \`${estado.ticker}\` adicionado à carteira!\nQuantidade: ${estado.quantidade}${linhaPreco}\nMeta: ${metaPercentual}%\n\nUse /carteira para ver a alocação completa.`,
                     { parse_mode: 'Markdown' }
                 );
             } else {
