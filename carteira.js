@@ -1,46 +1,55 @@
-// Arquivo: carteira.js — NOVA (Carteira em arquivo local, sem Supabase)
+// Arquivo: carteira.js — NOVA (Carteira persistida no Supabase)
 //
-// FASE 5 do roadmap — adicionado nesta versão:
+// MIGRAÇÃO: substitui o armazenamento em carteira.json (perdido a cada
+// redeploy) por uma tabela `portfolios` no Supabase. Todas as funções
+// exportadas mantêm a MESMA assinatura de antes — bot.js não precisa
+// de nenhuma alteração.
+//
+// A carteira continua sendo ÚNICA e compartilhada (não há separação
+// por usuário do Telegram ainda). Usamos um user_id fixo ('default')
+// na tabela só para deixar o schema já pronto para multi-usuário no
+// futuro, sem mudar o comportamento atual.
+//
+// FASE 5 do roadmap (mantido):
 // - Preço médio de compra (opcional) por ativo
 // - Ganho/perda por ativo, calculado no PREÇO NA MOEDA ORIGINAL do
-//   ativo (não em BRL) — evita ter que assumir uma cotação histórica
-//   do dólar que não temos guardada, e é a métrica mais padrão que
-//   um investidor usa pra avaliar desempenho de um ativo específico.
+//   ativo (não em BRL)
 // - "Próximo aporte": lista os ativos abaixo da meta, em ordem de
-//   prioridade. NUNCA sugere venda — só aponta onde direcionar
-//   dinheiro novo, conforme princípio permanente do NOVA.
+//   prioridade. NUNCA sugere venda.
 
-const fs = require('fs');
-const path = require('path');
+const { createClient } = require('@supabase/supabase-js');
 const { buscarCotacaoUSDBRL } = require('./mercado');
 
-const CARTEIRA_PATH = path.join(__dirname, 'carteira.json');
+const USER_ID_PADRAO = 'default'; // carteira única/compartilhada, por enquanto
 
-// ─── Helpers ─────────────────────────────────────────────
-function lerCarteira() {
-    try {
-        if (!fs.existsSync(CARTEIRA_PATH)) return [];
-        const raw = fs.readFileSync(CARTEIRA_PATH, 'utf8');
-        return JSON.parse(raw);
-    } catch (e) {
-        console.error('Erro ao ler carteira:', e.message);
+const supabase = createClient(
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+);
+
+// ─── Helpers de persistência ─────────────────────────────
+async function lerCarteira() {
+    const { data, error } = await supabase
+        .from('portfolios')
+        .select('*')
+        .eq('user_id', USER_ID_PADRAO);
+
+    if (error) {
+        console.error('Erro ao ler carteira do Supabase:', error.message);
         return [];
     }
+
+    // Mapeia snake_case (banco) -> camelCase (resto do código, igual ao JSON antigo)
+    return data.map((row) => ({
+        ticker: row.ticker,
+        quantidade: Number(row.quantidade),
+        metaPercentual: Number(row.meta_percentual),
+        precoMedio: row.preco_medio !== null ? Number(row.preco_medio) : null,
+        criadoEm: row.created_at,
+    }));
 }
 
-function salvarCarteira(carteira) {
-    try {
-        fs.writeFileSync(CARTEIRA_PATH, JSON.stringify(carteira, null, 2), 'utf8');
-        return true;
-    } catch (e) {
-        console.error('Erro ao salvar carteira:', e.message);
-        return false;
-    }
-}
-
-/**
- * Busca preço E moeda de um ticker via Yahoo Finance.
- */
+// ─── Busca de preço (inalterado) ─────────────────────────
 async function buscarPreco(ticker) {
     try {
         const symbol = ticker.toUpperCase();
@@ -59,9 +68,6 @@ async function buscarPreco(ticker) {
     }
 }
 
-/**
- * Converte um preço para BRL, se necessário.
- */
 function converterParaBRL(preco, moeda, cotacaoUSDBRL) {
     if (!moeda || moeda === 'BRL') {
         return preco;
@@ -72,10 +78,10 @@ function converterParaBRL(preco, moeda, cotacaoUSDBRL) {
     return null;
 }
 
-// ─── Funções principais ──────────────────────────────────
+// ─── Funções principais (mesma lógica de antes) ──────────
 
 async function calcularAlocacao() {
-    const carteira = lerCarteira();
+    const carteira = await lerCarteira();
     if (carteira.length === 0) {
         return { ativos: [], total: 0, vazio: true };
     }
@@ -107,9 +113,6 @@ async function calcularAlocacao() {
             }
         }
 
-        // --- NOVO: ganho/perda, calculado na moeda ORIGINAL do ativo ---
-        // (evita depender de uma cotação histórica do dólar que não
-        // guardamos — compara maçã com maçã, preço com preço).
         let ganhoPerdaPercentual = null;
         let ganhoPerdaAbsolutoOriginal = null;
 
@@ -147,17 +150,12 @@ async function calcularAlocacao() {
     };
 }
 
-/**
- * NOVO — Sugestão de próximo aporte. Lista os ativos ABAIXO da meta,
- * do mais prioritário (maior distância da meta) pro menos.
- * NUNCA inclui sugestão de venda — só onde colocar dinheiro novo.
- */
 function gerarSugestaoAporte(resultado) {
     if (resultado.vazio) return [];
 
     return resultado.ativos
         .filter((a) => parseFloat(a.diferenca) < 0)
-        .sort((a, b) => parseFloat(a.diferenca) - parseFloat(b.diferenca)); // mais negativo primeiro
+        .sort((a, b) => parseFloat(a.diferenca) - parseFloat(b.diferenca));
 }
 
 function formatarCarteira(resultado) {
@@ -195,7 +193,6 @@ function formatarCarteira(resultado) {
             `  ${emojiDiff} Diferença: ${a.diferenca}%\n\n`;
     }
 
-    // --- NOVO: Próximo aporte ---
     const sugestoes = gerarSugestaoAporte(resultado);
     if (sugestoes.length > 0) {
         texto += `🎯 *Próximo aporte* (prioridade, do mais distante da meta)\n`;
@@ -222,38 +219,46 @@ function formatarCarteira(resultado) {
  * @param {number|null} precoMedio - opcional; null se o usuário pulou
  */
 async function adicionarAtivo(ticker, quantidade, metaPercentual, precoMedio = null) {
-    const carteira = lerCarteira();
-    const idx = carteira.findIndex(a => a.ticker.toUpperCase() === ticker.toUpperCase());
+    const { error } = await supabase
+        .from('portfolios')
+        .upsert(
+            {
+                user_id: USER_ID_PADRAO,
+                ticker: ticker.toUpperCase(),
+                quantidade,
+                meta_percentual: metaPercentual,
+                preco_medio: precoMedio,
+                updated_at: new Date().toISOString(),
+            },
+            { onConflict: 'user_id,ticker' }
+        );
 
-    if (idx >= 0) {
-        carteira[idx].quantidade = quantidade;
-        carteira[idx].metaPercentual = metaPercentual;
-        carteira[idx].precoMedio = precoMedio;
-    } else {
-        carteira.push({
-            ticker: ticker.toUpperCase(),
-            quantidade: quantidade,
-            metaPercentual: metaPercentual,
-            precoMedio: precoMedio,
-            criadoEm: new Date().toISOString(),
-        });
+    if (error) {
+        console.error('Erro ao salvar no Supabase:', error.message);
+        return { sucesso: false, erro: error.message };
     }
 
-    const ok = salvarCarteira(carteira);
-    return { sucesso: ok, erro: ok ? null : 'Falha ao salvar arquivo' };
+    return { sucesso: true, erro: null };
 }
 
 async function removerAtivo(ticker) {
-    let carteira = lerCarteira();
-    const antes = carteira.length;
-    carteira = carteira.filter(a => a.ticker.toUpperCase() !== ticker.toUpperCase());
+    const { data, error } = await supabase
+        .from('portfolios')
+        .delete()
+        .eq('user_id', USER_ID_PADRAO)
+        .eq('ticker', ticker.toUpperCase())
+        .select();
 
-    if (carteira.length === antes) {
+    if (error) {
+        console.error('Erro ao remover do Supabase:', error.message);
+        return { sucesso: false, erro: error.message };
+    }
+
+    if (!data || data.length === 0) {
         return { sucesso: false, erro: 'Ativo não encontrado' };
     }
 
-    const ok = salvarCarteira(carteira);
-    return { sucesso: ok, erro: ok ? null : 'Falha ao salvar arquivo' };
+    return { sucesso: true, erro: null };
 }
 
 module.exports = {
