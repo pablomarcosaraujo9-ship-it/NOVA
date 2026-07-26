@@ -1,4 +1,14 @@
 // Arquivo: carteira.js — NOVA (Carteira em arquivo local, sem Supabase)
+//
+// FASE 5 do roadmap — adicionado nesta versão:
+// - Preço médio de compra (opcional) por ativo
+// - Ganho/perda por ativo, calculado no PREÇO NA MOEDA ORIGINAL do
+//   ativo (não em BRL) — evita ter que assumir uma cotação histórica
+//   do dólar que não temos guardada, e é a métrica mais padrão que
+//   um investidor usa pra avaliar desempenho de um ativo específico.
+// - "Próximo aporte": lista os ativos abaixo da meta, em ordem de
+//   prioridade. NUNCA sugere venda — só aponta onde direcionar
+//   dinheiro novo, conforme princípio permanente do NOVA.
 
 const fs = require('fs');
 const path = require('path');
@@ -30,8 +40,6 @@ function salvarCarteira(carteira) {
 
 /**
  * Busca preço E moeda de um ticker via Yahoo Finance.
- * Antes só retornava o preço — agora também retorna a moeda,
- * necessária para exibir e converter corretamente.
  */
 async function buscarPreco(ticker) {
     try {
@@ -52,8 +60,7 @@ async function buscarPreco(ticker) {
 }
 
 /**
- * Converte um preço para BRL, se necessário (mesma lógica usada
- * em analise.js para o /investir — Fase 1 do roadmap).
+ * Converte um preço para BRL, se necessário.
  */
 function converterParaBRL(preco, moeda, cotacaoUSDBRL) {
     if (!moeda || moeda === 'BRL') {
@@ -62,7 +69,6 @@ function converterParaBRL(preco, moeda, cotacaoUSDBRL) {
     if (moeda === 'USD') {
         return preco * cotacaoUSDBRL;
     }
-    // Moeda não suportada — não arrisca converter errado
     return null;
 }
 
@@ -74,8 +80,6 @@ async function calcularAlocacao() {
         return { ativos: [], total: 0, vazio: true };
     }
 
-    // Busca a cotação do dólar uma única vez (evita repetir a chamada
-    // para cada ativo em USD da carteira).
     let cotacaoUSDBRL = null;
     try {
         cotacaoUSDBRL = await buscarCotacaoUSDBRL();
@@ -98,26 +102,37 @@ async function calcularAlocacao() {
                 valorEmBRL = precoConvertido !== null ? precoConvertido * item.quantidade : 0;
                 if (precoConvertido === null) totalIncompleto = true;
             } else {
-                // Não conseguiu buscar a cotação — não soma no total
-                // para não misturar moedas por engano.
                 valorEmBRL = 0;
                 totalIncompleto = true;
             }
+        }
+
+        // --- NOVO: ganho/perda, calculado na moeda ORIGINAL do ativo ---
+        // (evita depender de uma cotação histórica do dólar que não
+        // guardamos — compara maçã com maçã, preço com preço).
+        let ganhoPerdaPercentual = null;
+        let ganhoPerdaAbsolutoOriginal = null;
+
+        if (item.precoMedio !== null && item.precoMedio !== undefined && preco) {
+            ganhoPerdaAbsolutoOriginal = preco - item.precoMedio;
+            ganhoPerdaPercentual = (ganhoPerdaAbsolutoOriginal / item.precoMedio) * 100;
         }
 
         ativosComPreco.push({
             ticker: item.ticker,
             quantidade: item.quantidade,
             metaPercentual: item.metaPercentual,
+            precoMedio: item.precoMedio ?? null,
             preco: preco,
             moeda: moeda,
             valor: valorEmBRL,
             valorOriginal: valorOriginal,
+            ganhoPerdaPercentual,
+            ganhoPerdaAbsolutoOriginal,
         });
         total += valorEmBRL;
     }
 
-    // Calcula percentuais reais (sempre com base no valor em BRL)
     for (const ativo of ativosComPreco) {
         ativo.percentualReal = total > 0 ? ((ativo.valor / total) * 100).toFixed(2) : '0.00';
         ativo.diferenca = (parseFloat(ativo.percentualReal) - ativo.metaPercentual).toFixed(2);
@@ -130,6 +145,19 @@ async function calcularAlocacao() {
         totalIncompleto,
         cotacaoUSDBRL,
     };
+}
+
+/**
+ * NOVO — Sugestão de próximo aporte. Lista os ativos ABAIXO da meta,
+ * do mais prioritário (maior distância da meta) pro menos.
+ * NUNCA inclui sugestão de venda — só onde colocar dinheiro novo.
+ */
+function gerarSugestaoAporte(resultado) {
+    if (resultado.vazio) return [];
+
+    return resultado.ativos
+        .filter((a) => parseFloat(a.diferenca) < 0)
+        .sort((a, b) => parseFloat(a.diferenca) - parseFloat(b.diferenca)); // mais negativo primeiro
 }
 
 function formatarCarteira(resultado) {
@@ -149,10 +177,32 @@ function formatarCarteira(resultado) {
 
         texto += `• *${a.ticker}*\n` +
             `  Quantidade: ${a.quantidade}\n` +
-            `  Preço atual: ${precoStr}\n` +
-            `  Valor: R$ ${a.valor.toFixed(2)}\n` +
+            `  Preço atual: ${precoStr}\n`;
+
+        if (a.precoMedio !== null) {
+            texto += `  Preço médio: ${a.moeda} ${a.precoMedio.toFixed(2)}\n`;
+        }
+
+        if (a.ganhoPerdaPercentual !== null) {
+            const emojiGanho = a.ganhoPerdaPercentual >= 0 ? '📈' : '📉';
+            const sinal = a.ganhoPerdaPercentual >= 0 ? '+' : '';
+            texto += `  ${emojiGanho} Ganho/Perda: ${sinal}${a.ganhoPerdaPercentual.toFixed(2)}% ` +
+                `(${a.moeda} ${sinal}${a.ganhoPerdaAbsolutoOriginal.toFixed(2)}/un.)\n`;
+        }
+
+        texto += `  Valor: R$ ${a.valor.toFixed(2)}\n` +
             `  Meta: ${a.metaPercentual}% | Real: ${a.percentualReal}%\n` +
             `  ${emojiDiff} Diferença: ${a.diferenca}%\n\n`;
+    }
+
+    // --- NOVO: Próximo aporte ---
+    const sugestoes = gerarSugestaoAporte(resultado);
+    if (sugestoes.length > 0) {
+        texto += `🎯 *Próximo aporte* (prioridade, do mais distante da meta)\n`;
+        sugestoes.forEach((a, i) => {
+            texto += `${i + 1}. ${a.ticker} — Real: ${a.percentualReal}% | Meta: ${a.metaPercentual}%\n`;
+        });
+        texto += `\n_Sugestão só indica onde direcionar aportes novos — o NOVA nunca recomenda venda para rebalancear._\n\n`;
     }
 
     if (resultado.cotacaoUSDBRL) {
@@ -165,18 +215,26 @@ function formatarCarteira(resultado) {
     return texto;
 }
 
-async function adicionarAtivo(ticker, quantidade, metaPercentual) {
+/**
+ * @param {string} ticker
+ * @param {number} quantidade
+ * @param {number} metaPercentual
+ * @param {number|null} precoMedio - opcional; null se o usuário pulou
+ */
+async function adicionarAtivo(ticker, quantidade, metaPercentual, precoMedio = null) {
     const carteira = lerCarteira();
     const idx = carteira.findIndex(a => a.ticker.toUpperCase() === ticker.toUpperCase());
 
     if (idx >= 0) {
         carteira[idx].quantidade = quantidade;
         carteira[idx].metaPercentual = metaPercentual;
+        carteira[idx].precoMedio = precoMedio;
     } else {
         carteira.push({
             ticker: ticker.toUpperCase(),
             quantidade: quantidade,
             metaPercentual: metaPercentual,
+            precoMedio: precoMedio,
             criadoEm: new Date().toISOString(),
         });
     }
@@ -203,4 +261,5 @@ module.exports = {
     formatarCarteira,
     adicionarAtivo,
     removerAtivo,
+    gerarSugestaoAporte,
 };
