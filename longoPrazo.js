@@ -1,11 +1,20 @@
 /**
  * MÓDULO DE LONGO PRAZO — NOVA
  * ===============================
- * Complementa a análise diária com contexto de 12 meses, permitindo
- * distinguir ruído de curto prazo de tendência estrutural do ativo.
+ * Complementa a análise diária com contexto de 12 meses e 5 anos,
+ * permitindo distinguir ruído de curto prazo de tendência estrutural.
  *
  * Usado apenas nos ativos que já apareceram no ranking do dia
  * (top 3 quedas / top 3 altas), para não estourar limite de API.
+ *
+ * DIAGNÓSTICO (pendência conhecida): alguns tickers brasileiros
+ * (ex: RENT3.SA) às vezes voltavam "indisponível" sem explicação.
+ * Agora o código:
+ * 1) Repassa a mensagem de erro REAL da API (em vez de um texto
+ *    genérico fixo), pra dar visibilidade da causa.
+ * 2) Tenta um intervalo alternativo automaticamente se o primeiro
+ *    pedido não trouxer dado (comum quando um intervalo específico
+ *    não é suportado para aquele ticker).
  */
 
 const BRAPI_TOKEN = process.env.BRAPI_TOKEN;
@@ -15,19 +24,26 @@ const BRAPI_BASE_URL = 'https://brapi.dev/api';
 const TWELVEDATA_BASE_URL = 'https://api.twelvedata.com';
 
 /**
- * Busca variação de ~12 meses de um ticker brasileiro via Brapi.
+ * Faz uma chamada única à Brapi para um range/interval específico
+ * e calcula a variação percentual entre o primeiro e o último preço.
+ * Retorna também a mensagem de erro crua da API, se houver, para
+ * facilitar diagnóstico (em vez de esconder atrás de um texto genérico).
  */
-async function buscarVariacaoAnualBrasil(tickerSemSufixo) {
+async function buscarVariacaoBrasil(tickerSemSufixo, range, interval) {
     try {
-        const url = `${BRAPI_BASE_URL}/quote/${encodeURIComponent(tickerSemSufixo)}?range=1y&interval=1mo&token=${BRAPI_TOKEN}`;
+        const url = `${BRAPI_BASE_URL}/quote/${encodeURIComponent(tickerSemSufixo)}?range=${range}&interval=${interval}&token=${BRAPI_TOKEN}`;
         const resposta = await fetch(url);
         const dados = await resposta.json();
 
-        if (!dados.results || !dados.results[0] || !dados.results[0].historicalDataPrice) {
-            return { sucesso: false, erro: 'Histórico anual não disponível' };
+        const historico = dados.results?.[0]?.historicalDataPrice;
+
+        if (!historico || historico.length < 2) {
+            return {
+                sucesso: false,
+                erro: dados.message || dados.results?.[0]?.error || `Sem dado histórico para range=${range}/interval=${interval}`,
+            };
         }
 
-        const historico = dados.results[0].historicalDataPrice;
         const precoInicial = historico[0].close;
         const precoFinal = historico[historico.length - 1].close;
         const variacaoPercentual = ((precoFinal - precoInicial) / precoInicial) * 100;
@@ -39,75 +55,19 @@ async function buscarVariacaoAnualBrasil(tickerSemSufixo) {
 }
 
 /**
- * Busca variação de ~12 meses de um ticker global via Twelve Data.
+ * Faz uma chamada única à Twelve Data e calcula a variação percentual.
  */
-async function buscarVariacaoAnualGlobal(ticker) {
+async function buscarVariacaoGlobal(ticker, interval, outputsize) {
     try {
-        const url = `${TWELVEDATA_BASE_URL}/time_series?symbol=${encodeURIComponent(ticker)}&interval=1month&outputsize=13&apikey=${TWELVEDATA_API_KEY}`;
+        const url = `${TWELVEDATA_BASE_URL}/time_series?symbol=${encodeURIComponent(ticker)}&interval=${interval}&outputsize=${outputsize}&apikey=${TWELVEDATA_API_KEY}`;
         const resposta = await fetch(url);
         const dados = await resposta.json();
 
         if (dados.status === 'error' || !dados.values || dados.values.length < 2) {
-            return { sucesso: false, erro: dados.message || 'Histórico anual não disponível' };
-        }
-
-        const valoresOrdenados = [...dados.values].reverse(); // do mais antigo ao mais recente
-        const precoInicial = parseFloat(valoresOrdenados[0].close);
-        const precoFinal = parseFloat(valoresOrdenados[valoresOrdenados.length - 1].close);
-        const variacaoPercentual = ((precoFinal - precoInicial) / precoInicial) * 100;
-
-        return { sucesso: true, variacaoPercentual };
-    } catch (erro) {
-        return { sucesso: false, erro: erro.message };
-    }
-}
-
-/**
- * Ponto de entrada único: decide a fonte com base no formato do ticker.
- */
-async function buscarVariacaoAnual(ticker) {
-    if (ticker.toUpperCase().endsWith('.SA')) {
-        const tickerSemSufixo = ticker.slice(0, -3);
-        return buscarVariacaoAnualBrasil(tickerSemSufixo);
-    }
-    return buscarVariacaoAnualGlobal(ticker);
-}
-
-/**
- * Busca variação de ~5 anos de um ticker brasileiro via Brapi.
- */
-async function buscarVariacaoCincoAnosBrasil(tickerSemSufixo) {
-    try {
-        const url = `${BRAPI_BASE_URL}/quote/${encodeURIComponent(tickerSemSufixo)}?range=5y&interval=3mo&token=${BRAPI_TOKEN}`;
-        const resposta = await fetch(url);
-        const dados = await resposta.json();
-
-        if (!dados.results || !dados.results[0] || !dados.results[0].historicalDataPrice) {
-            return { sucesso: false, erro: 'Histórico de 5 anos não disponível' };
-        }
-
-        const historico = dados.results[0].historicalDataPrice;
-        const precoInicial = historico[0].close;
-        const precoFinal = historico[historico.length - 1].close;
-        const variacaoPercentual = ((precoFinal - precoInicial) / precoInicial) * 100;
-
-        return { sucesso: true, variacaoPercentual };
-    } catch (erro) {
-        return { sucesso: false, erro: erro.message };
-    }
-}
-
-/**
- * Busca variação de ~5 anos de um ticker global via Twelve Data.
- */
-async function buscarVariacaoCincoAnosGlobal(ticker) {
-    try {
-        const url = `${TWELVEDATA_BASE_URL}/time_series?symbol=${encodeURIComponent(ticker)}&interval=1month&outputsize=60&apikey=${TWELVEDATA_API_KEY}`;
-        const resposta = await fetch(url);
-        const dados = await resposta.json();
-
-        if (dados.status === 'error' || !dados.values || dados.values.length < 2) {
-            return { sucesso: false, erro: dados.message || 'Histórico de 5 anos não disponível' };
+            return {
+                sucesso: false,
+                erro: dados.message || `Sem dado histórico para interval=${interval}/outputsize=${outputsize}`,
+            };
         }
 
         const valoresOrdenados = [...dados.values].reverse();
@@ -121,12 +81,66 @@ async function buscarVariacaoCincoAnosGlobal(ticker) {
     }
 }
 
-async function buscarVariacaoCincoAnos(ticker) {
-    if (ticker.toUpperCase().endsWith('.SA')) {
-        const tickerSemSufixo = ticker.slice(0, -3);
-        return buscarVariacaoCincoAnosBrasil(tickerSemSufixo);
+/**
+ * Busca variação de ~12 meses, com fallback de intervalo se o
+ * primeiro pedido não trouxer dado.
+ */
+async function buscarVariacaoAnual(ticker) {
+    const isBrasil = ticker.toUpperCase().endsWith('.SA');
+    const tickerLimpo = isBrasil ? ticker.slice(0, -3) : ticker;
+
+    if (isBrasil) {
+        let resultado = await buscarVariacaoBrasil(tickerLimpo, '1y', '1mo');
+        if (!resultado.sucesso) {
+            console.error(`[longoPrazo] 12m falhou para ${ticker} (range=1y/interval=1mo): ${resultado.erro}. Tentando fallback...`);
+            resultado = await buscarVariacaoBrasil(tickerLimpo, '1y', '1wk');
+            if (!resultado.sucesso) {
+                console.error(`[longoPrazo] 12m fallback também falhou para ${ticker} (interval=1wk): ${resultado.erro}`);
+            }
+        }
+        return resultado;
     }
-    return buscarVariacaoCincoAnosGlobal(ticker);
+
+    let resultado = await buscarVariacaoGlobal(ticker, '1month', 13);
+    if (!resultado.sucesso) {
+        console.error(`[longoPrazo] 12m falhou para ${ticker} (interval=1month): ${resultado.erro}. Tentando fallback...`);
+        resultado = await buscarVariacaoGlobal(ticker, '1week', 53);
+        if (!resultado.sucesso) {
+            console.error(`[longoPrazo] 12m fallback também falhou para ${ticker} (interval=1week): ${resultado.erro}`);
+        }
+    }
+    return resultado;
+}
+
+/**
+ * Busca variação de ~5 anos, com fallback de intervalo se o
+ * primeiro pedido não trouxer dado.
+ */
+async function buscarVariacaoCincoAnos(ticker) {
+    const isBrasil = ticker.toUpperCase().endsWith('.SA');
+    const tickerLimpo = isBrasil ? ticker.slice(0, -3) : ticker;
+
+    if (isBrasil) {
+        let resultado = await buscarVariacaoBrasil(tickerLimpo, '5y', '3mo');
+        if (!resultado.sucesso) {
+            console.error(`[longoPrazo] 5a falhou para ${ticker} (range=5y/interval=3mo): ${resultado.erro}. Tentando fallback...`);
+            resultado = await buscarVariacaoBrasil(tickerLimpo, '5y', '1mo');
+            if (!resultado.sucesso) {
+                console.error(`[longoPrazo] 5a fallback também falhou para ${ticker} (interval=1mo): ${resultado.erro}`);
+            }
+        }
+        return resultado;
+    }
+
+    let resultado = await buscarVariacaoGlobal(ticker, '1month', 60);
+    if (!resultado.sucesso) {
+        console.error(`[longoPrazo] 5a falhou para ${ticker} (interval=1month): ${resultado.erro}. Tentando fallback...`);
+        resultado = await buscarVariacaoGlobal(ticker, '1week', 260);
+        if (!resultado.sucesso) {
+            console.error(`[longoPrazo] 5a fallback também falhou para ${ticker} (interval=1week): ${resultado.erro}`);
+        }
+    }
+    return resultado;
 }
 
 /**
