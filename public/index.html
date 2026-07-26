@@ -298,6 +298,7 @@ async function carregarGrafico(ticker, periodo){
                 renderGrafico(data.dados);
             });
             salvarNoCache(tickerAtual, periodo, data.dados);
+            localStorage.setItem('nova_ultimo_ticker', tickerAtual);
             iniciarContador();
         } else if (!doCache) {
             document.getElementById('mensagem').innerText = data.texto || 'Erro ao gerar gráfico';
@@ -384,10 +385,17 @@ function renderGrafico(dados) {
         },
     });
 
+    // Cor dinâmica: verde se o ativo subiu no período mostrado,
+    // vermelho se caiu — mesmo padrão do Google Finance, em vez
+    // de um azul fixo que não diz nada sobre a tendência.
+    const subiuNoPeriodo = dados[dados.length - 1].value >= dados[0].value;
+    const corLinha = subiuNoPeriodo ? '#3fb950' : '#f85149';
+    const corSombraTopo = subiuNoPeriodo ? 'rgba(63, 185, 80, 0.4)' : 'rgba(248, 81, 73, 0.4)';
+
     areaSeries = chart.addAreaSeries({
-        lineColor: '#1e88e5',
-        topColor: 'rgba(30, 136, 229, 0.4)',
-        bottomColor: 'rgba(30, 136, 229, 0.0)',
+        lineColor: corLinha,
+        topColor: corSombraTopo,
+        bottomColor: 'rgba(0, 0, 0, 0.0)',
         lineWidth: 2,
     });
 
@@ -515,11 +523,16 @@ function fecharRanking() {
     document.getElementById('ranking-panel').style.display = 'none';
 }
 
-// Se o bot mandou um link tipo ?ticker=PETR4.SA, já abre com esse ticker
+// Prioridade: 1) ticker vindo do bot (?ticker=...), 2) último ticker
+// visto nesse celular, 3) o padrão PETR4.SA (já no HTML).
 const params = new URLSearchParams(window.location.search);
 const tickerDaURL = params.get('ticker');
+const ultimoTicker = localStorage.getItem('nova_ultimo_ticker');
+
 if (tickerDaURL) {
     document.getElementById('ticker-input').value = tickerDaURL.toUpperCase();
+} else if (ultimoTicker) {
+    document.getElementById('ticker-input').value = ultimoTicker;
 }
 
 verGrafico();
