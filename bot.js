@@ -131,7 +131,8 @@ bot.on('text', async (ctx) => {
         estadoConversa.delete(chatId);
 
         const listaCompleta = listaPadrao.LISTA_PADRAO_COMPLETA;
-        const tempoEstimadoMin = Math.ceil(((listaCompleta.length + 4) * 8) / 60);
+        const globaisCount = listaCompleta.filter((t) => !t.toUpperCase().endsWith('.SA')).length;
+        const tempoEstimadoMin = Math.ceil(((globaisCount + 2) * 8) / 60);
         await ctx.reply(
             `🔍 *Varredura iniciada* — ${listaCompleta.length} ativos + índices.\nTempo estimado: ~${tempoEstimadoMin} min (respeitando limite da API).\nAguarde...`,
             { parse_mode: 'Markdown' }
@@ -142,7 +143,7 @@ bot.on('text', async (ctx) => {
             const textoIndices = indices.formatarIndices(indicesResultado);
             await ctx.reply(textoIndices, { parse_mode: 'Markdown' });
 
-            const cotacoes = await mercado.buscarMultiplasCotacoes(listaCompleta);
+            const cotacoes = await mercado.buscarMultiplasCotacoesOtimizado(listaCompleta);
             const relatorio = analise.gerarRelatorioVarredura(cotacoes, valorInformado);
             await ctx.reply(relatorio, { parse_mode: 'Markdown' });
 
