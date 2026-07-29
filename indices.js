@@ -1,171 +1,85 @@
-/**
- * MÓDULO DE ÍNDICES — NOVA
- * ===========================
- * Busca o "termômetro geral" do mercado: principais índices e câmbio.
- * Ajuda a interpretar se um movimento individual é isolado ou reflete
- * uma tendência mais ampla do mercado como um todo.
- */
+// Arquivo: indices.js
+// Busca os principais índices de mercado e o dólar
 
-const BRAPI_TOKEN = process.env.BRAPI_TOKEN;
-const TWELVEDATA_API_KEY = process.env.TWELVEDATA_API_KEY;
+// Tickers corrigidos para evitar erro "indisponível"
+// ^GSPC = S&P 500 (EUA)
+// ^IXIC = Nasdaq (EUA)
+// ^BVSP = Ibovespa (Brasil)
+// USDBRL=X = Dólar / Real
 
-const BRAPI_BASE_URL = 'https://brapi.dev/api';
-const TWELVEDATA_BASE_URL = 'https://api.twelvedata.com';
+const TICKERS_INDICES = ['^BVSP', '^GSPC', '^IXIC', 'USDBRL=X'];
 
-/**
- * Busca o Ibovespa via Brapi.
- */
-async function buscarIbovespa() {
-    try {
-        const url = `${BRAPI_BASE_URL}/quote/^BVSP?token=${BRAPI_TOKEN}`;
-        const resposta = await fetch(url);
-        const dados = await resposta.json();
+const LABELS = {
+    '^BVSP': 'Ibovespa',
+    '^GSPC': 'S&P 500',
+    '^IXIC': 'Nasdaq',
+    'USDBRL=X': 'Dólar (USD/BRL)'
+};
 
-        if (!dados.results || dados.results.length === 0) {
-            return { sucesso: false, nome: 'Ibovespa', erro: dados.message || 'Não disponível' };
-        }
-
-        const r = dados.results[0];
-        return {
-            sucesso: true,
-            nome: 'Ibovespa',
-            valor: r.regularMarketPrice,
-            variacaoPercentual: r.regularMarketChangePercent,
-        };
-    } catch (erro) {
-        return { sucesso: false, nome: 'Ibovespa', erro: erro.message };
-    }
-}
-
-/**
- * Busca um índice global (S&P 500 ou Nasdaq) via Twelve Data.
- */
-async function buscarIndiceGlobal(simbolo, nomeExibicao) {
-    try {
-        const url = `${TWELVEDATA_BASE_URL}/quote?symbol=${encodeURIComponent(simbolo)}&apikey=${TWELVEDATA_API_KEY}`;
-        const resposta = await fetch(url);
-        const dados = await resposta.json();
-
-        if (dados.status === 'error' || dados.code) {
-            return { sucesso: false, nome: nomeExibicao, erro: dados.message || 'Não disponível' };
-        }
-
-        return {
-            sucesso: true,
-            nome: nomeExibicao,
-            valor: parseFloat(dados.close),
-            variacaoPercentual: parseFloat(dados.percent_change),
-        };
-    } catch (erro) {
-        return { sucesso: false, nome: nomeExibicao, erro: erro.message };
-    }
-}
-
-/**
- * Busca a cotação do Dólar (USD/BRL) via Twelve Data.
- */
-async function buscarDolar() {
-    try {
-        const url = `${TWELVEDATA_BASE_URL}/quote?symbol=USD/BRL&apikey=${TWELVEDATA_API_KEY}`;
-        const resposta = await fetch(url);
-        const dados = await resposta.json();
-
-        if (dados.status === 'error' || dados.code) {
-            return { sucesso: false, nome: 'Dólar (USD/BRL)', erro: dados.message || 'Não disponível' };
-        }
-
-        return {
-            sucesso: true,
-            nome: 'Dólar (USD/BRL)',
-            valor: parseFloat(dados.close),
-            variacaoPercentual: parseFloat(dados.percent_change),
-        };
-    } catch (erro) {
-        return { sucesso: false, nome: 'Dólar (USD/BRL)', erro: erro.message };
-    }
-}
-
-/**
- * Busca todos os índices de uma vez, espaçando as chamadas
- * para respeitar limites de requisições por minuto.
- */
 async function buscarTodosIndices() {
     const resultados = [];
 
-    resultados.push(await buscarIbovespa());
-    await new Promise((r) => setTimeout(r, 8000));
+    for (const ticker of TICKERS_INDICES) {
+        try {
+            // Usa o mesmo endpoint do mercado.js para puxar o preço
+            const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=1d`;
+            const response = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+            const data = await response.json();
 
-    resultados.push(await buscarIndiceGlobal('SPY', 'S&P 500 (via ETF SPY)'));
-    await new Promise((r) => setTimeout(r, 8000));
+            let preco = null;
+            let variacao = null;
 
-    resultados.push(await buscarIndiceGlobal('QQQ', 'Nasdaq (via ETF QQQ)'));
-    await new Promise((r) => setTimeout(r, 8000));
+            if (data.chart && data.chart.result && data.chart.result[0]) {
+                const meta = data.chart.result[0].meta;
+                const indicadores = data.chart.result[0].indicators;
+                if (indicadores && indicadores.quote && indicadores.quote[0]) {
+                    const close = indicadores.quote[0].close;
+                    if (close && close.length > 0) {
+                        preco = close[close.length - 1];
+                        // Calcula variação baseada no preço de fechamento anterior (se disponível)
+                        const previousClose = meta.previousClose;
+                        if (previousClose && preco) {
+                            variacao = ((preco - previousClose) / previousClose) * 100;
+                        }
+                    }
+                }
+            }
 
-    resultados.push(await buscarDolar());
+            resultados.push({
+                ticker: ticker,
+                label: LABELS[ticker] || ticker,
+                preco: preco,
+                variacaoPercentual: variacao
+            });
+
+        } catch (e) {
+            // Se falhar, adiciona como indisponível
+            resultados.push({
+                ticker: ticker,
+                label: LABELS[ticker] || ticker,
+                preco: null,
+                variacaoPercentual: null
+            });
+        }
+    }
 
     return resultados;
 }
 
-/**
- * Formata os índices em texto Markdown para o Telegram.
- */
-function formatarIndices(indices) {
-    let texto = `🌎 *ÍNDICES DE MERCADO*\n───────────────────────\n`;
-
-    indices.forEach((idx) => {
-        if (idx.sucesso) {
-            const sinal = idx.variacaoPercentual >= 0 ? '+' : '';
-            const emoji = idx.variacaoPercentual >= 0 ? '🟢' : '🔴';
-            texto += `${emoji} *${idx.nome}:* ${idx.valor.toFixed(2)} (${sinal}${idx.variacaoPercentual.toFixed(2)}%)\n`;
+function formatarIndices(resultados) {
+    let texto = "🌎 ÍNDICES DE MERCADO\n───────────────────────\n";
+    for (const item of resultados) {
+        if (item.variacaoPercentual !== null) {
+            const sinal = item.variacaoPercentual >= 0 ? '+' : '';
+            texto += `\n${item.label}: ${sinal}${item.variacaoPercentual.toFixed(2)}%`;
         } else {
-            texto += `⚪ *${idx.nome}:* indisponível no momento\n`;
+            texto += `\n${item.label}: indisponível no momento`;
         }
-    });
-
+    }
     return texto;
-}
-
-/**
- * Gera um resumo de "sentimento do mercado" com base nos índices
- * já coletados — puramente descritivo do que já aconteceu, não
- * uma previsão do que vem a seguir.
- */
-function calcularSentimentoMercado(indices) {
-    const validos = indices.filter((i) => i.sucesso);
-    if (validos.length === 0) {
-        return { emoji: '⚪', rotulo: 'Indisponível', texto: 'Não foi possível calcular o sentimento do mercado hoje.' };
-    }
-
-    const positivos = validos.filter((i) => i.variacaoPercentual > 0).length;
-    const negativos = validos.filter((i) => i.variacaoPercentual < 0).length;
-
-    let emoji, rotulo;
-    if (positivos > negativos) {
-        emoji = '🟢';
-        rotulo = 'Positivo';
-    } else if (negativos > positivos) {
-        emoji = '🔴';
-        rotulo = 'Negativo';
-    } else {
-        emoji = '🟡';
-        rotulo = 'Misto / Neutro';
-    }
-
-    const nomesPositivos = validos.filter((i) => i.variacaoPercentual > 0).map((i) => i.nome);
-    const nomesNegativos = validos.filter((i) => i.variacaoPercentual < 0).map((i) => i.nome);
-
-    let texto = '';
-    if (nomesNegativos.length > 0) texto += `${nomesNegativos.join(', ')} ${nomesNegativos.length > 1 ? 'caíram' : 'caiu'}`;
-    if (nomesNegativos.length > 0 && nomesPositivos.length > 0) texto += ', enquanto ';
-    if (nomesPositivos.length > 0) texto += `${nomesPositivos.join(', ')} ${nomesPositivos.length > 1 ? 'subiram' : 'subiu'}`;
-    texto += '.';
-
-    return { emoji, rotulo, texto };
 }
 
 module.exports = {
     buscarTodosIndices,
-    formatarIndices,
-    calcularSentimentoMercado,
-    buscarDolar,
+    formatarIndices
 };
