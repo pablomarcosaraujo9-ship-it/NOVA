@@ -1,6 +1,17 @@
 // Arquivo: bot.js — NOVA (Bot de Análise de Mercado)
+// VERSÃO POLLING — adaptado para rodar no Termux (Android), sem
+// depender de webhook, domínio público ou porta exposta.
+//
+// O QUE MUDOU EM RELAÇÃO À VERSÃO WEBHOOK (Azure):
+// - Removido: express, app.listen, bot.webhookCallback, setWebhook.
+// - Adicionado: dotenv (lê o arquivo .env local) e bot.launch()
+//   (ativa o modo polling — o bot passa a buscar updates ativamente
+//   no Telegram, em vez de esperar o Telegram chamar uma URL).
+// - Toda a lógica de comandos abaixo é IDÊNTICA à versão anterior.
 
-// CAPTURA DE ERROS PARA APARECER NO LOG DO RENDER
+require('dotenv').config();
+
+// CAPTURA DE ERROS PARA APARECER NO LOG (visível via `pm2 logs`)
 process.on('uncaughtException', (err) => {
     console.error('ERRO NÃO CAPTURADO:', err);
 });
@@ -8,7 +19,6 @@ process.on('unhandledRejection', (reason) => {
     console.error('PROMISE REJEITADA:', reason);
 });
 
-const express = require('express');
 const { Telegraf } = require('telegraf');
 const mercado = require('./mercado');
 const listaPadrao = require('./listaPadrao');
@@ -20,13 +30,13 @@ const scanner = require('./scanner');
 const carteira = require('./carteira');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const PORT = process.env.PORT || 3000;
+
+if (!TELEGRAM_TOKEN) {
+    console.error('❌ TELEGRAM_TOKEN não encontrado no .env. O bot não pode iniciar.');
+    process.exit(1);
+}
 
 const bot = new Telegraf(TELEGRAM_TOKEN);
-const app = express();
-
-// NÃO usar express.json() quando usa webhook do Telegraf
-// O Telegraf lida com o body parser internamente
 
 const estadoConversa = new Map();
 
@@ -41,25 +51,6 @@ bot.start((ctx) => ctx.reply(
     "`/carteira_remover` — remover ativo da carteira",
     { parse_mode: 'Markdown' }
 ));
-
-// ========== COMANDO PARA VERIFICAR WEBHOOK ==========
-bot.command('webhook', async (ctx) => {
-    try {
-        const info = await bot.telegram.getWebhookInfo();
-        const url = info.url || "(não configurado)";
-        const pending = info.pending_update_count || 0;
-        const lastError = info.last_error_message || "nenhum";
-        await ctx.reply(
-            `🔍 *Status do Webhook*\n\n` +
-            `📍 URL: ${url}\n` +
-            `⏳ Updates pendentes: ${pending}\n` +
-            `❌ Último erro: ${lastError}`,
-            { parse_mode: 'Markdown' }
-        );
-    } catch (e) {
-        await ctx.reply(`⚠️ Erro ao verificar webhook: ${e.message}`);
-    }
-});
 
 bot.command('investir', async (ctx) => {
     estadoConversa.set(ctx.chat.id, { etapa: 'aguardando_valor' });
@@ -295,28 +286,23 @@ bot.on('text', async (ctx) => {
     }
 });
 
-// ========== WEBHOOK ==========
-// O Telegraf lida com o body parser internamente — NÃO usar express.json()
-app.use(bot.webhookCallback('/webhook'));
-
-// Health check pro Azure saber que o app está vivo
-app.get('/', (req, res) => {
-    res.send('🤖 NOVA Bot online via Webhook!');
-});
-
-app.listen(PORT, async () => {
-    console.log(`🚀 Servidor rodando na porta ${PORT}`);
-
-    // Configura o webhook automaticamente no Telegram
-    const webhookUrl = `https://meu-bot-telegram-2026-d9g8ekhheca2cfhg.canadacentral-01.azurewebsites.net/webhook`;
-
+// ========== INÍCIO DO BOT (POLLING) ==========
+// Antes de ativar o polling, remove qualquer webhook antigo que possa
+// ter ficado configurado no Telegram (da época do Azure) — se os dois
+// modos ficarem ativos ao mesmo tempo, o Telegram rejeita updates.
+async function iniciar() {
     try {
-        await bot.telegram.setWebhook(webhookUrl);
-        console.log('✅ Webhook configurado:', webhookUrl);
+        await bot.telegram.deleteWebhook({ drop_pending_updates: false });
+        console.log('✅ Webhook antigo removido (se existia).');
     } catch (err) {
-        console.error('❌ Erro ao configurar webhook:', err.message);
+        console.error('⚠️ Não foi possível remover webhook antigo:', err.message);
     }
-});
+
+    await bot.launch();
+    console.log('🚀 NOVA rodando em modo POLLING — aguardando mensagens no Telegram.');
+}
+
+iniciar();
 
 // Graceful shutdown
 process.once('SIGINT', () => bot.stop('SIGINT'));
