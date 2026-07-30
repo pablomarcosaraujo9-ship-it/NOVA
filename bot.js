@@ -8,7 +8,7 @@
 //   (ativa o modo polling — o bot passa a buscar updates ativamente
 //   no Telegram, em vez de esperar o Telegram chamar uma URL).
 // - Toda a lógica de comandos abaixo é IDÊNTICA à versão anterior.
-
+const { perguntarAoGPT } = require('./src/openai_helper');
 require('dotenv').config();
 
 // CAPTURA DE ERROS PARA APARECER NO LOG (visível via `pm2 logs`)
