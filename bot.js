@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`;
 const DEEPSEEK_URL = 'https://api.deepseek.com/chat/completions';
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
@@ -84,7 +84,6 @@ async function adicionarAtivo({ ticker, quantidade, preco_medio }) {
       .maybeSingle();
 
     if (existente) {
-      // Já existe: soma quantidade e recalcula preço médio ponderado (se ambos tiverem preço)
       const novaQtd = Number(existente.quantidade) + Number(quantidade);
       let novoPrecoMedio = existente.preco_medio;
 
@@ -147,14 +146,12 @@ async function removerAtivo({ ticker, quantidade }) {
       return JSON.stringify({ erro: `Ativo ${tickerFinal} não encontrado na carteira.` });
     }
 
-    // Sem quantidade especificada: remove o ativo inteiro
     if (!quantidade || Number(quantidade) >= Number(existente.quantidade)) {
       const { error } = await supabase.from('portfolios').delete().eq('id', existente.id);
       if (error) return JSON.stringify({ erro: error.message });
       return JSON.stringify({ sucesso: true, acao: 'removido_completo', ticker: tickerFinal });
     }
 
-    // Remove parcialmente
     const novaQtd = Number(existente.quantidade) - Number(quantidade);
     const { error } = await supabase
       .from('portfolios')
@@ -179,7 +176,6 @@ async function verCarteira() {
       return JSON.stringify({ carteira: [], mensagem: 'Carteira vazia.' });
     }
 
-    // Busca cotação atual de cada ativo em paralelo
     const carteiraComCotacao = await Promise.all(
       data.map(async (item) => {
         const cotacaoRaw = await consultarCotacao(item.ticker);
@@ -377,15 +373,16 @@ async function perguntarIA(mensagemUsuario) {
 
   if (resultado.error) {
     const erro = resultado.error;
+    console.error('Erro Gemini (1ª etapa):', JSON.stringify(erro));
+
     const cotaEstourada = erro.status === 'RESOURCE_EXHAUSTED' || erro.code === 429;
     const indisponivel = erro.status === 'UNAVAILABLE' || erro.code === 503;
 
     if (cotaEstourada || indisponivel) {
-      console.log('⚡ Gemini indisponível, usando DeepSeek como fallback...');
+      console.log('⚡ Gemini indisponível (1ª etapa), usando DeepSeek como fallback...');
       return perguntarDeepSeek(mensagemUsuario);
     }
 
-    console.error('Erro da IA:', erro);
     return '❌ Ops, deu um problema aqui. Tenta perguntar de novo em instantes.';
   }
 
@@ -415,8 +412,18 @@ async function perguntarIA(mensagemUsuario) {
     const respostaFinal = await chamarGemini(historico, false);
 
     if (respostaFinal.error) {
-      console.log('⚡ Gemini falhou na segunda etapa, usando DeepSeek...');
-      return perguntarDeepSeek(mensagemUsuario);
+      const erro2 = respostaFinal.error;
+      console.error('Erro Gemini (2ª etapa):', JSON.stringify(erro2));
+
+      const cotaEstourada2 = erro2.status === 'RESOURCE_EXHAUSTED' || erro2.code === 429;
+      const indisponivel2 = erro2.status === 'UNAVAILABLE' || erro2.code === 503;
+
+      if (cotaEstourada2 || indisponivel2) {
+        console.log('⚡ Gemini indisponível (2ª etapa), usando DeepSeek...');
+        return perguntarDeepSeek(mensagemUsuario);
+      }
+
+      return '❌ Ops, deu um problema aqui. Tenta perguntar de novo em instantes.';
     }
     return respostaFinal.candidates[0].content.parts[0].text;
   }
@@ -461,7 +468,7 @@ bot.on('text', async (ctx) => {
 });
 
 bot.launch();
-console.log('✅ Nebulosa Nova (Gemini + DeepSeek + cotações + carteira Supabase) iniciada. Aguardando mensagens...');
+console.log('✅ Nebulosa Nova (Gemini Flash-Lite + DeepSeek + cotações + carteira Supabase) iniciada. Aguardando mensagens...');
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
