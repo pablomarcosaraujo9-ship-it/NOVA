@@ -1,38 +1,38 @@
-# 🤖 Bot NOVA - Telegram
+# 🌌 Nebulosa Nova - Bot de Investimentos com IA
 
-**Bot de análise de ações, notícias e carteira para Telegram.**  
-Feito em Node.js + Yahoo Finance API
+**Bot de Telegram com IA orquestradora para acompanhamento de mercado financeiro.**
+Conversa em linguagem natural — sem comandos fixos, a IA decide sozinha qual ferramenta usar.
 
 **Autor:** [@pablomarcosaraujo9](https://github.com/pablomarcosaraujo9-ship-it)
 
 ---
 
-## 📌 Funcionalidades
+## 🧠 Como funciona
 
-- Análise rápida de ativos com o comando `/nova PETR4.SA`
-- Cotação em tempo real (Yahoo Finance)
-- Notícias recentes e classificação automática de motivos (alta/baixa)
-- Índices: IBOV, S&P500, Nasdaq, Dólar
-- Carteira virtual: adicione, remova e acompanhe seus papéis
-- Ranking de melhores ações do dia (`/investir`)
-- Análise fundamentalista (P/L, DY, etc.) com `/scanner` (ativos do Brasil)
-- Geração de gráficos via TradingView com `/grafico`
-- Contexto de longo prazo (notícias dos últimos 6 meses) com `/longo`
-- Cache inteligente para reduzir chamadas à API
+Em vez de decorar comandos (`/scanner`, `/investir`), você simplesmente conversa:
+
+> "Cotação da PETR4 ao vivo"
+> "Comprei 10 ações da VALE3 a 76 reais"
+> "Por que a NVIDIA subiu hoje?"
+> "Me alerta se o Bitcoin cair 10%"
+
+A IA (Gemini, com fallback automático para DeepSeek) interpreta o pedido e chama a ferramenta certa sozinha, via function calling.
 
 ---
 
-## 🧠 Arquitetura & Fluxo
+## 📌 Funcionalidades
 
-### Como funciona o comando `/nova PETR4.SA`
+| Recurso | Descrição | Fonte |
+|---|---|---|
+| 💰 **Cotação ao vivo** | Ações BR/EUA, bolsas internacionais (Tóquio, Londres, Paris, Frankfurt, Hong Kong), FIIs, câmbio USD-BRL, criptomoedas | Yahoo Finance (grátis) |
+| 📊 **Análise comparativa** | Compara múltiplos ativos na mesma consulta | Yahoo Finance |
+| 📐 **Análise fundamentalista** | P/L, LPA, dividend yield, dívida líquida/EBITDA, ROE, margem líquida | Brapi |
+| 📈 **Análise técnica** | Médias móveis (20/50/200 dias), RSI com sinal de sobrecompra/sobrevenda | Yahoo Finance |
+| 🖼️ **Gráficos de histórico** | Imagem de gráfico de preço (30 dias a 5 anos) | Yahoo Finance + QuickChart |
+| 📰 **Notícias com sentimento** | Notícias recentes por empresa/ativo, com pontuação de sentimento | MarketAux (fallback: Google News) |
+| 💼 **Carteira persistente** | Adicionar, remover e visualizar ativos com cotação atual | Supabase |
+| 🔔 **Alertas de preço** | Avisa automaticamente quando um ativo variar X% (configurável) | Supabase + verificação a cada 15 min |
 
-```mermaid
-graph TD
-    A[1. Usuário: nova PETR4] --> B[2. Telegram]
-    B --> C[3. bot.js]
-    C --> D[4. novaAnalise.js]
-    D --> E{5. Cache existe em cache_nova/?}
-    E -- Sim e < 3h --> H[8. Responde Usuário]
-    E -- Não --> F[6. Busca API via mercado.js]
-    F --> G[7. Processa e Salva Cache]
-    G --> H
+---
+
+## 🧱 Arquitetura
